@@ -14,9 +14,6 @@ static struct {
     const char *action;
     cui_key_combo combo;
 } keybindings[] = {
-    { "Copy", { CUI_MOD_PRIMARY, CUI_KEY_C } },
-    { "Paste", { CUI_MOD_PRIMARY, CUI_KEY_V } },
-    { "Undo", { CUI_MOD_PRIMARY, CUI_KEY_Z } },
     { "Find", { CUI_MOD_PRIMARY, CUI_KEY_F } },
     { "Save", { CUI_MOD_PRIMARY, CUI_KEY_S } },
 };

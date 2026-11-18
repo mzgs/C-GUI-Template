@@ -57,7 +57,7 @@ static void check_keybinding_edit(cui_theme_mode theme) {
     cui_set_reduced_motion(ui, true);
     settings_open = true;
     settings_section = 1;
-    strcpy(keybinding_filter, "pAsT");
+    strcpy(keybinding_filter, "sAv");
     cui_key_combo original = keybindings[1].combo;
     cui_begin_frame(ui, 1.0f / 60);
     frame(ui, NULL);
@@ -68,7 +68,7 @@ static void check_keybinding_edit(cui_theme_mode theme) {
     press_settings_key(ui, CUI_KEY_K, CUI_MOD_PRIMARY | CUI_MOD_SHIFT);
     assert(keybindings[1].combo.key == CUI_KEY_K);
     assert(keybindings[1].combo.mods == (CUI_MOD_PRIMARY | CUI_MOD_SHIFT));
-    assert(keybindings[0].combo.key == CUI_KEY_C);
+    assert(keybindings[0].combo.key == CUI_KEY_F);
     press_settings_key(ui, CUI_KEY_ENTER, 0);
     press_settings_key(ui, CUI_KEY_ESCAPE, 0);
     assert(settings_open);
@@ -84,13 +84,13 @@ static void check_keybinding_edit(cui_theme_mode theme) {
 }
 
 int main(void) {
-    assert(contains_ignore_case("Copy", ""));
+    assert(contains_ignore_case("Find", ""));
     assert(contains_ignore_case("", ""));
-    assert(contains_ignore_case("Paste", "pAsT"));
+    assert(contains_ignore_case("Save", "sAv"));
     assert(contains_ignore_case("Cmd Shift K", "shift k"));
-    assert(!contains_ignore_case("Copy", "Copying"));
-    assert(!contains_ignore_case("", "Copy"));
-    assert(!contains_ignore_case("Copy", "xyz"));
+    assert(!contains_ignore_case("Find", "Finding"));
+    assert(!contains_ignore_case("", "Find"));
+    assert(!contains_ignore_case("Find", "xyz"));
     @autoreleasepool {
         cui_app *app = cui_app_create(&(cui_app_desc){ .hidden = true });
         assert(app);
