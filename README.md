@@ -13,6 +13,9 @@ The script works from any directory, configures the first build, and lets CMake
 rebuild changed files before launching. When nothing changed, it runs the existing
 app without recompiling. A failed build stops the script before launch.
 
+On macOS, choose **C GUI Template → Settings…** or press **⌘,** to open
+the Settings dialog. It has no configurable options yet.
+
 Requires Git, CMake 3.14+, and a C compiler with the system SDK. On macOS,
 install Xcode Command Line Tools and CMake. Linux also needs X11 development
 headers (`libx11-dev` on Debian/Ubuntu). Windows supports Visual Studio or MinGW.

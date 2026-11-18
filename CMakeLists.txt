@@ -14,6 +14,9 @@ add_executable(empty_gui MACOSX_BUNDLE main.c)
 target_link_libraries(empty_gui PRIVATE cui::cui)
 cui_app_target(empty_gui)
 if(APPLE)
+    enable_language(OBJC)
+    target_sources(empty_gui PRIVATE macos_menu.m)
+    set_source_files_properties(macos_menu.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(empty_gui PROPERTIES
         OUTPUT_NAME "C GUI Template"
         MACOSX_BUNDLE_BUNDLE_NAME "C GUI Template")
@@ -27,6 +30,10 @@ if(BUILD_TESTING)
     set_tests_properties(window_smoke PROPERTIES
         TIMEOUT 15 PASS_REGULAR_EXPRESSION "cui: saved")
     if(APPLE)
+        add_executable(macos_menu_test tests/macos_menu_test.m macos_menu.m)
+        target_link_libraries(macos_menu_test PRIVATE cui::cui)
+        add_test(NAME macos_menu COMMAND macos_menu_test)
+        set_tests_properties(macos_menu PROPERTIES TIMEOUT 15 RUN_SERIAL TRUE)
         add_test(NAME run_script_smoke COMMAND ${CMAKE_COMMAND} -E env
             "CUI_SCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/run-smoke.png"
             CUI_SCREENSHOT_FRAMES=1 ${CMAKE_CURRENT_SOURCE_DIR}/run.sh)
