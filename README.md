@@ -13,13 +13,20 @@ The script works from any directory, configures the first build, and lets CMake
 rebuild changed files before launching. When nothing changed, it runs the existing
 app without recompiling. A failed build stops the script before launch.
 
-On macOS, choose **C GUI Template → Settings…** or press **⌘,** to open
-the Settings dialog. On its Keybindings page, filter by action or key combination
+On macOS, choose **C GUI Template → Settings…** or press **⌘,**.
+On Windows and Linux, click **Settings** or press **Ctrl+,**.
+On the Keybindings page, filter by action or key combination
 (case-insensitive), then click a shortcut and press a key
 combination to change it, or press Backspace to clear it. Example bindings are
-for demonstration only. General settings and keybinding changes autosave to
-`~/Library/Application Support/<bundle name>/settings.json` and load at startup.
-The folder name comes from `MACOSX_BUNDLE_BUNDLE_NAME` in `CMakeLists.txt`.
+for demonstration only. General settings and keybinding changes autosave to the
+following locations and load at startup.
+
+- macOS — `~/Library/Application Support/<app name>/settings.json`
+- Windows — `%LOCALAPPDATA%\<app name>\settings.json`
+- Linux — `$XDG_CONFIG_HOME/<app name>/settings.json`, defaulting to `~/.config/<app name>/settings.json`
+
+Set `APP_NAME` in `CMakeLists.txt` or pass `-DAPP_NAME="My App"` when configuring
+to name a new app and give it its own settings folder.
 
 Requires Git, CMake 3.14+, and a C compiler with the system SDK. On macOS,
 install Xcode Command Line Tools and CMake. Linux also needs X11 development
@@ -30,7 +37,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --parallel
 ```
 
-The first configure downloads Better-C-UI at a pinned commit and needs internet
+The first configure downloads pinned versions of Better-C-UI and yyjson and needs internet
 access. Its examples, tests, and optional add-ons are excluded by default.
 
 Run on macOS:

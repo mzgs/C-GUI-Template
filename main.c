@@ -6,18 +6,18 @@
 
 #ifdef __APPLE__
 #include "macos_menu.h"
-static bool settings_save_failed;
 #endif
 
 static bool settings_open;
+static bool settings_save_failed;
 static int settings_section;
 static char keybinding_filter[128];
 static app_settings settings = {
     .example_string = "Example",
     .example_number = 42,
     .keybindings = {
-        { "find", "Find", { CUI_MOD_PRIMARY, CUI_KEY_F } },
-        { "save", "Save", { CUI_MOD_PRIMARY, CUI_KEY_S } },
+        { "Find", "find_key", "find_mods", { CUI_MOD_PRIMARY, CUI_KEY_F } },
+        { "Save", "save_key", "save_mods", { CUI_MOD_PRIMARY, CUI_KEY_S } },
     },
 };
 
@@ -39,7 +39,13 @@ static void frame(cui_ctx *ui, void *user) {
 #ifdef __APPLE__
     app_menu_install(&settings_open);
 #else
-    (void)user;
+    if (!settings_open) {
+        cui_row(ui, .pad = 12) {
+            if (cui_button(ui, "Settings", .icon = CUI_ICON_SETTINGS)) settings_open = true;
+        }
+        if (!cui_wants_keyboard(ui) && cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_COMMA))
+            settings_open = true;
+    }
 #endif
     cui_vec2 size = cui_viewport_size(ui);
     cui_dialog(ui, "Settings", &settings_open, .width = size.x * 0.9f) {
@@ -106,16 +112,12 @@ static void frame(cui_ctx *ui, void *user) {
                             }
                             if (!visible) cui_secondary(ui, "No shortcuts match your filter.");
                         } else {
-                            cui_text(ui, "C GUI Template");
+                            cui_text(ui, APP_NAME);
                             cui_secondary(ui, "Version " APP_VERSION);
                             cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");
                         }
-#ifdef __APPLE__
                         if (changed) settings_save_failed = !app_settings_save(&settings, user);
                         if (settings_save_failed) cui_secondary(ui, "Couldn’t save settings.");
-#else
-                        (void)changed;
-#endif
                     }
                 }
             }
@@ -124,11 +126,9 @@ static void frame(cui_ctx *ui, void *user) {
 }
 
 int main(void) {
-#ifdef __APPLE__
     app_settings_load(&settings, NULL);
-#endif
     return cui_app_run(&(cui_app_desc){
-        .title = "C GUI Template",
+        .title = APP_NAME,
         .width = 900,
         .height = 600,
         .follow_system_theme = true,

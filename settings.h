@@ -9,13 +9,14 @@ typedef struct {
     char example_string[128];
     double example_number;
     struct {
-        const char *name;
         const char *action;
+        const char *key_name;
+        const char *mods_name;
         cui_key_combo combo;
     } keybindings[2];
 } app_settings;
 
-/* A NULL path uses the app's settings.json in Application Support. */
+/* A NULL path uses the app's per-user settings.json. */
 void app_settings_load(app_settings *settings, const char *path);
 bool app_settings_save(const app_settings *settings, const char *path);
 
