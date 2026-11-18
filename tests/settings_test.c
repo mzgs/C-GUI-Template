@@ -13,6 +13,21 @@
 #include <string.h>
 
 static const char *test_settings_path;
+static const char *mock_dialog_path;
+static cui_file_dialog_kind mock_dialog_last_kind;
+static const char *mock_dialog_last_filter;
+static const char *mock_dialog_last_default_name;
+static int mock_dialog_calls;
+
+static bool mock_file_dialog(const cui_file_dialog_opts *opts, char *out, size_t cap) {
+    ++mock_dialog_calls;
+    mock_dialog_last_kind = opts->kind;
+    mock_dialog_last_filter = opts->filter;
+    mock_dialog_last_default_name = opts->default_name;
+    if (!mock_dialog_path) return false;
+    int len = snprintf(out, cap, "%s", mock_dialog_path);
+    return len >= 0 && (size_t)len < cap;
+}
 
 static void draw_settings(cui_ctx *ui) {
     cui_begin_frame(ui, 1.0f / 60);
@@ -199,7 +214,7 @@ static void check_load_validation_and_compat(const char *path) {
         "\"find_key\":\"NotAKey\",\"find_mods\":\"ctrl\","
         "\"save_key\":-1,\"save_mods\":0}");
     app_settings loaded = original;
-    app_settings_load(&loaded, path);
+    assert(app_settings_load(&loaded, path));
     assert(loaded.example_number == 42);
     assert(strcmp(loaded.example_string, "Loaded") == 0);
     assert(loaded.keybindings[0].combo.key == CUI_KEY_F);
@@ -212,12 +227,112 @@ static void check_load_validation_and_compat(const char *path) {
              CUI_KEY_G, CUI_MOD_SHIFT | CUI_MOD_CTRL);
     write_text_file(path, legacy);
     loaded = original;
-    app_settings_load(&loaded, path);
+    assert(app_settings_load(&loaded, path));
     assert(loaded.keybindings[0].combo.key == CUI_KEY_G);
     assert(loaded.keybindings[0].combo.mods == (CUI_MOD_SHIFT | CUI_MOD_CTRL));
     assert(loaded.keybindings[1].combo.key == CUI_KEY_J);
     assert(loaded.keybindings[1].combo.mods == (CUI_MOD_CTRL | CUI_MOD_ALT));
+
+    /* Malformed, empty, non-object, or unrelated JSON files fail without mutating settings. */
+    const char *invalid_cases[] = { "{not json", "[1,2,3]", "{}", "{\"unrelated\":123}" };
+    for (size_t i = 0; i < sizeof invalid_cases / sizeof invalid_cases[0]; ++i) {
+        write_text_file(path, invalid_cases[i]);
+        loaded = original;
+        assert(!app_settings_load(&loaded, path));
+        assert(strcmp(loaded.example_string, original.example_string) == 0);
+        assert(loaded.example_number == original.example_number);
+    }
+    assert(!app_settings_load(&loaded, ""));
     remove(path);
+}
+
+static void check_import_export(const char *base_dir, cui_theme_mode theme) {
+    char export_path[4096];
+    char bad_path[4096];
+    int len = snprintf(export_path, sizeof export_path, "%s/exported.json", base_dir);
+    assert(len >= 0 && (size_t)len < sizeof export_path);
+    len = snprintf(bad_path, sizeof bad_path, "%s/bad.json", base_dir);
+    assert(len >= 0 && (size_t)len < sizeof bad_path);
+    remove(test_settings_path);
+    remove(export_path);
+    remove(bad_path);
+
+    cui_ctx *ui = cui_create(&(cui_ctx_desc){ .theme = theme });
+    assert(ui);
+    cui_set_viewport(ui, 900, 600, 1);
+    cui_set_reduced_motion(ui, true);
+    app_settings original = settings;
+    settings_open = true;
+    settings_section = 0;
+    settings_dirty = false;
+    settings_status = NULL;
+    settings_file_dialog = mock_file_dialog;
+
+    strcpy(settings.example_string, "Exported Value");
+    settings.example_number = 84;
+    settings.keybindings[0].combo = (cui_key_combo){ CUI_MOD_CTRL | CUI_MOD_SHIFT, CUI_KEY_G };
+
+    draw_settings(ui);
+    /* Close, 3 sidebar items, Example string, Example number (+2 steppers), Import..., Export... */
+    for (int i = 0; i < 10; ++i) press_key(ui, CUI_KEY_TAB, 0);
+
+    /* Export to chosen path. */
+    mock_dialog_calls = 0;
+    mock_dialog_path = export_path;
+    press_key(ui, CUI_KEY_ENTER, 0);
+    assert(mock_dialog_calls == 1);
+    assert(mock_dialog_last_kind == CUI_FILE_SAVE);
+    assert(strcmp(mock_dialog_last_filter, "json") == 0);
+    assert(strcmp(mock_dialog_last_default_name, "settings.json") == 0);
+    assert(settings_status && strcmp(settings_status, "Settings exported.") == 0);
+
+    /* Change in-memory settings, then cancel Import: nothing changes. */
+    settings = original;
+    press_key(ui, CUI_KEY_TAB, CUI_MOD_SHIFT);
+    mock_dialog_path = NULL;
+    press_key(ui, CUI_KEY_ENTER, 0);
+    assert(mock_dialog_calls == 2);
+    assert(mock_dialog_last_kind == CUI_FILE_OPEN);
+    assert(strcmp(settings.example_string, original.example_string) == 0);
+    assert(settings.example_number == original.example_number);
+
+    /* Import from exported file: updates state and persists to per-user settings. */
+    mock_dialog_path = export_path;
+    press_key(ui, CUI_KEY_ENTER, 0);
+    assert(mock_dialog_calls == 3);
+    assert(mock_dialog_last_kind == CUI_FILE_OPEN);
+    assert(strcmp(mock_dialog_last_filter, "json") == 0);
+    assert(strcmp(settings.example_string, "Exported Value") == 0);
+    assert(settings.example_number == 84);
+    assert(settings.keybindings[0].combo.key == CUI_KEY_G);
+    assert(settings.keybindings[0].combo.mods == (CUI_MOD_CTRL | CUI_MOD_SHIFT));
+    assert(settings_status && strcmp(settings_status, "Settings imported.") == 0);
+
+    app_settings persisted = original;
+    assert(app_settings_load(&persisted, test_settings_path));
+    assert(strcmp(persisted.example_string, "Exported Value") == 0);
+    assert(persisted.example_number == 84);
+    assert(persisted.keybindings[0].combo.key == CUI_KEY_G);
+
+    /* Import invalid JSON: leaves settings intact and reports error. */
+    write_text_file(bad_path, "{broken");
+    mock_dialog_path = bad_path;
+    press_key(ui, CUI_KEY_ENTER, 0);
+    assert(strcmp(settings.example_string, "Exported Value") == 0);
+    assert(settings.example_number == 84);
+    assert(settings_status && strstr(settings_status, "import") != NULL);
+
+    /* Closing settings clears status. */
+    settings_open = false;
+    draw_settings(ui);
+    assert(settings_status == NULL);
+
+    settings_file_dialog = default_file_dialog;
+    settings = original;
+    cui_destroy(ui);
+    remove(test_settings_path);
+    remove(export_path);
+    remove(bad_path);
 }
 
 static void check_override_paths(const char *base_dir) {
@@ -261,7 +376,7 @@ int main(int argc, char **argv) {
     test_settings_path = path;
     remove(path);
 
-    app_settings_load(&settings, test_settings_path);
+    assert(!app_settings_load(&settings, test_settings_path));
     assert(settings.example_number == 42);
 
     check_settings_layout(900, 600, CUI_THEME_LIGHT);
@@ -275,6 +390,8 @@ int main(int argc, char **argv) {
     check_keybinding_edit(CUI_THEME_LIGHT);
     check_keybinding_edit(CUI_THEME_DARK);
     check_load_validation_and_compat(path);
+    check_import_export(argv[1], CUI_THEME_LIGHT);
+    check_import_export(argv[1], CUI_THEME_DARK);
     check_override_paths(argv[1]);
 
 #ifndef __APPLE__

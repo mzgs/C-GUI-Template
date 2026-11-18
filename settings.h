@@ -17,7 +17,7 @@ typedef struct {
 } app_settings;
 
 /* A NULL path uses the app's per-user settings.json. */
-void app_settings_load(app_settings *settings, const char *path);
+bool app_settings_load(app_settings *settings, const char *path);
 bool app_settings_save(const app_settings *settings, const char *path);
 
 #endif

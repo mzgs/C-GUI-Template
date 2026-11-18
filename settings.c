@@ -36,6 +36,7 @@ bool macos_settings_path(char *path, size_t capacity);
 static bool settings_path(path_char *path, const char *override) {
 #ifdef _WIN32
     if (override) {
+        if (!override[0]) return false;
         if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, override, -1, path, SETTINGS_PATH_CAP))
             return false;
         for (wchar_t *p = path; *p; ++p)
@@ -55,6 +56,7 @@ static bool settings_path(path_char *path, const char *override) {
     return len >= 0 && len < SETTINGS_PATH_CAP;
 #else
     if (override) {
+        if (!override[0]) return false;
         int len = snprintf(path, SETTINGS_PATH_CAP, "%s", override);
         return len >= 0 && len < SETTINGS_PATH_CAP;
     }
@@ -227,9 +229,9 @@ static void format_mods(int mods, char *buf, size_t cap) {
     }
 }
 
-void app_settings_load(app_settings *settings, const char *override) {
+bool app_settings_load(app_settings *settings, const char *override) {
     path_char path[SETTINGS_PATH_CAP];
-    if (!settings_path(path, override)) return;
+    if (!settings_path(path, override)) return false;
 #ifdef _WIN32
     FILE *file = _wfopen(path, L"rb");
 #else
@@ -237,7 +239,7 @@ void app_settings_load(app_settings *settings, const char *override) {
 #endif
     if (!file) {
         if (errno != ENOENT) fputs("Could not read settings.json\n", stderr);
-        return;
+        return false;
     }
     yyjson_doc *doc = yyjson_read_fp(file, YYJSON_READ_ALLOW_BOM, NULL, NULL);
     fclose(file);
@@ -245,27 +247,39 @@ void app_settings_load(app_settings *settings, const char *override) {
     if (!yyjson_is_obj(root)) {
         fputs("Invalid settings.json\n", stderr);
         yyjson_doc_free(doc);
-        return;
+        return false;
     }
+
+    app_settings loaded = *settings;
+    bool applied = false;
 
     yyjson_val *value = yyjson_obj_get(root, "example_string");
     const char *text = yyjson_get_str(value);
     size_t len = yyjson_get_len(value);
-    if (text && len < sizeof settings->example_string && !memchr(text, '\0', len))
-        memcpy(settings->example_string, text, len + 1);
+    if (text && len < sizeof loaded.example_string && !memchr(text, '\0', len)) {
+        memcpy(loaded.example_string, text, len + 1);
+        applied = true;
+    }
     double number = json_number(yyjson_obj_get(root, "example_number"));
-    if (number >= EXAMPLE_NUMBER_MIN && number <= EXAMPLE_NUMBER_MAX)
-        settings->example_number = number;
+    if (number >= EXAMPLE_NUMBER_MIN && number <= EXAMPLE_NUMBER_MAX) {
+        loaded.example_number = number;
+        applied = true;
+    }
 
-    for (size_t i = 0; i < sizeof settings->keybindings / sizeof settings->keybindings[0]; ++i) {
+    for (size_t i = 0; i < sizeof loaded.keybindings / sizeof loaded.keybindings[0]; ++i) {
         cui_key key = CUI_KEY_NONE;
         int mods = 0;
-        if (parse_key(yyjson_obj_get(root, settings->keybindings[i].key_name), &key) &&
-            parse_mods(yyjson_obj_get(root, settings->keybindings[i].mods_name), &mods) &&
-            (key != CUI_KEY_NONE || mods == 0))
-            settings->keybindings[i].combo = (cui_key_combo){ mods, key };
+        if (parse_key(yyjson_obj_get(root, loaded.keybindings[i].key_name), &key) &&
+            parse_mods(yyjson_obj_get(root, loaded.keybindings[i].mods_name), &mods) &&
+            (key != CUI_KEY_NONE || mods == 0)) {
+            loaded.keybindings[i].combo = (cui_key_combo){ mods, key };
+            applied = true;
+        }
     }
     yyjson_doc_free(doc);
+    if (!applied) return false;
+    *settings = loaded;
+    return true;
 }
 
 bool app_settings_save(const app_settings *settings, const char *override) {

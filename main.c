@@ -11,8 +11,15 @@
 static bool settings_open;
 static bool settings_save_failed;
 static bool settings_dirty;
+static const char *settings_status;
 static int settings_section;
 static char keybinding_filter[128];
+
+static bool default_file_dialog(const cui_file_dialog_opts *opts, char *out, size_t cap) {
+    return cui_app_file_dialog(NULL, opts, out, cap);
+}
+
+static bool (*settings_file_dialog)(const cui_file_dialog_opts *opts, char *out, size_t cap) = default_file_dialog;
 static app_settings settings = {
     .example_string = "Example",
     .example_number = 42,
@@ -60,7 +67,10 @@ static void frame(cui_ctx *ui, void *user) {
                             if (i == 2) cui_separator(ui);
                             if (cui_nav_item(ui, sections[i], .icon = icons[i],
                                              .selected = settings_section == i,
-                                             .group = "settings-sections")) settings_section = i;
+                                             .group = "settings-sections")) {
+                                if (settings_section != i) settings_status = NULL;
+                                settings_section = i;
+                            }
                         }
                     }
                 }
@@ -75,7 +85,10 @@ static void frame(cui_ctx *ui, void *user) {
                                          .width = compact ? CUI_FILL : CUI_PX(168));
                                 int flags = cui_input(ui, "example-string", settings.example_string,
                                                       sizeof settings.example_string, .width = CUI_FILL);
-                                if (flags & CUI_CHANGED) settings_dirty = true;
+                                if (flags & CUI_CHANGED) {
+                                    settings_dirty = true;
+                                    settings_status = NULL;
+                                }
                                 if (settings_dirty && (flags & (CUI_SUBMITTED | CUI_BLURRED))) changed = true;
                             }
                             cui_box(ui, .dir = compact ? CUI_COLUMN : CUI_ROW, .gap = compact ? 6 : 16) {
@@ -84,10 +97,54 @@ static void frame(cui_ctx *ui, void *user) {
                                 double previous = settings.example_number;
                                 if (cui_number(ui, "example-number", &settings.example_number,
                                                EXAMPLE_NUMBER_MIN, EXAMPLE_NUMBER_MAX, .width = CUI_FILL)) {
-                                    if (isfinite(settings.example_number)) changed = true;
-                                    else settings.example_number = previous;
+                                    if (isfinite(settings.example_number)) {
+                                        changed = true;
+                                        settings_status = NULL;
+                                    } else {
+                                        settings.example_number = previous;
+                                    }
                                 }
                             }
+                            cui_separator(ui);
+                            cui_box(ui, .dir = compact ? CUI_COLUMN : CUI_ROW, .gap = compact ? 6 : 16) {
+                                cui_text(ui, "Settings file", .font = CUI_FONT_MEDIUM,
+                                         .width = compact ? CUI_FILL : CUI_PX(168));
+                                cui_row(ui, .width = CUI_FILL, .gap = 8, .wrap = true) {
+                                    if (cui_button(ui, "Import…", .icon = CUI_ICON_UPLOAD)) {
+                                        char path[4096];
+                                        if (settings_file_dialog(&(cui_file_dialog_opts){
+                                                .kind = CUI_FILE_OPEN,
+                                                .title = "Import Settings",
+                                                .filter_name = "JSON",
+                                                .filter = "json",
+                                            }, path, sizeof path)) {
+                                            if (app_settings_load(&settings, path)) {
+                                                settings_save_failed = !app_settings_save(&settings, user);
+                                                settings_dirty = false;
+                                                changed = false;
+                                                settings_status = settings_save_failed ? NULL : "Settings imported.";
+                                            } else {
+                                                settings_status = "Couldn’t import settings.";
+                                            }
+                                        }
+                                    }
+                                    if (cui_button(ui, "Export…", .icon = CUI_ICON_DOWNLOAD)) {
+                                        char path[4096];
+                                        if (settings_file_dialog(&(cui_file_dialog_opts){
+                                                .kind = CUI_FILE_SAVE,
+                                                .title = "Export Settings",
+                                                .filter_name = "JSON",
+                                                .filter = "json",
+                                                .default_name = "settings.json",
+                                            }, path, sizeof path)) {
+                                            settings_status = app_settings_save(&settings, path)
+                                                ? "Settings exported."
+                                                : "Couldn’t export settings.";
+                                        }
+                                    }
+                                }
+                            }
+                            if (settings_status) cui_secondary(ui, settings_status);
                         } else if (settings_section == 1) {
                             cui_table_column columns[] = {
                                 { "Action", CUI_FILL, CUI_TEXT_LEFT, false },
@@ -131,9 +188,12 @@ static void frame(cui_ctx *ui, void *user) {
             }
         }
     }
-    if (settings_dirty && !settings_open) {
-        settings_save_failed = !app_settings_save(&settings, user);
-        settings_dirty = false;
+    if (!settings_open) {
+        settings_status = NULL;
+        if (settings_dirty) {
+            settings_save_failed = !app_settings_save(&settings, user);
+            settings_dirty = false;
+        }
     }
 }
 
