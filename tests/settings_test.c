@@ -433,19 +433,6 @@ static void check_load_validation_and_compat(const char *path) {
     assert(loaded.keybindings[APP_ACTION_SAVE].combo.key == CUI_KEY_L);
     assert(loaded.keybindings[APP_ACTION_SAVE].combo.mods == (CUI_MOD_CTRL | CUI_MOD_ALT));
 
-    /* Legacy flat and numeric keybinding formats remain readable. */
-    char legacy[256];
-    snprintf(legacy, sizeof legacy,
-             "{\"find_key\":%d,\"find_mods\":%d,\"save_key\":\"J\",\"save_mods\":\"ctrl alt\"}",
-             CUI_KEY_G, CUI_MOD_SHIFT | CUI_MOD_CTRL);
-    write_text_file(path, legacy);
-    loaded = original;
-    assert(app_settings_load(&loaded, path));
-    assert(loaded.keybindings[APP_ACTION_FIND].combo.key == CUI_KEY_G);
-    assert(loaded.keybindings[APP_ACTION_FIND].combo.mods == (CUI_MOD_SHIFT | CUI_MOD_CTRL));
-    assert(loaded.keybindings[APP_ACTION_SAVE].combo.key == CUI_KEY_J);
-    assert(loaded.keybindings[APP_ACTION_SAVE].combo.mods == (CUI_MOD_CTRL | CUI_MOD_ALT));
-
     /* Extra/unknown fields (including any version tag) are ignored when importing settings. */
     write_text_file(path, "{\"version\":\"9.9.9\",\"example_number\":50,\"future_field\":true}");
     loaded = original;

@@ -429,64 +429,49 @@ static bool parse_accent(yyjson_val *value, cui_accent *out) {
 }
 
 static bool parse_key(yyjson_val *value, cui_key *out) {
-    if (yyjson_is_str(value)) {
-        const char *text = yyjson_get_str(value);
-        size_t len = yyjson_get_len(value);
-        if (!text || memchr(text, '\0', len)) return false;
-        if (len == 0) {
-            *out = CUI_KEY_NONE;
+    if (!yyjson_is_str(value)) return false;
+    const char *text = yyjson_get_str(value);
+    size_t len = yyjson_get_len(value);
+    if (!text || memchr(text, '\0', len)) return false;
+    if (len == 0) {
+        *out = CUI_KEY_NONE;
+        return true;
+    }
+    for (int k = 1; k < CUI_KEY_COUNT; ++k) {
+        if (strcmp(cui_key_name((cui_key)k), text) == 0) {
+            *out = (cui_key)k;
             return true;
         }
-        for (int k = 1; k < CUI_KEY_COUNT; ++k) {
-            if (strcmp(cui_key_name((cui_key)k), text) == 0) {
-                *out = (cui_key)k;
-                return true;
-            }
-        }
-        return false;
-    }
-    double num = json_number(value);
-    if (num >= CUI_KEY_NONE && num < CUI_KEY_COUNT && num == floor(num)) {
-        *out = (cui_key)num;
-        return true;
     }
     return false;
 }
 
 static bool parse_mods(yyjson_val *value, int *out) {
-    if (yyjson_is_str(value)) {
-        const char *text = yyjson_get_str(value);
-        size_t len = yyjson_get_len(value);
-        if (!text || memchr(text, '\0', len)) return false;
-        int bits = 0;
-        const char *p = text;
-        while (*p) {
-            while (*p == ' ') ++p;
-            if (!*p) break;
-            const char *start = p;
-            while (*p && *p != ' ') ++p;
-            size_t tok_len = (size_t)(p - start);
-            int matched = 0;
-            for (size_t i = 0; i < sizeof mod_entries / sizeof mod_entries[0]; ++i) {
-                if (strlen(mod_entries[i].name) == tok_len &&
-                    memcmp(mod_entries[i].name, start, tok_len) == 0) {
-                    matched = mod_entries[i].bit;
-                    break;
-                }
+    if (!yyjson_is_str(value)) return false;
+    const char *text = yyjson_get_str(value);
+    size_t len = yyjson_get_len(value);
+    if (!text || memchr(text, '\0', len)) return false;
+    int bits = 0;
+    const char *p = text;
+    while (*p) {
+        while (*p == ' ') ++p;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != ' ') ++p;
+        size_t tok_len = (size_t)(p - start);
+        int matched = 0;
+        for (size_t i = 0; i < sizeof mod_entries / sizeof mod_entries[0]; ++i) {
+            if (strlen(mod_entries[i].name) == tok_len &&
+                memcmp(mod_entries[i].name, start, tok_len) == 0) {
+                matched = mod_entries[i].bit;
+                break;
             }
-            if (!matched) return false;
-            bits |= matched;
         }
-        *out = bits;
-        return true;
+        if (!matched) return false;
+        bits |= matched;
     }
-    const int mod_mask = CUI_MOD_SHIFT | CUI_MOD_CTRL | CUI_MOD_ALT | CUI_MOD_SUPER;
-    double num = json_number(value);
-    if (num >= 0 && num <= mod_mask && num == floor(num)) {
-        *out = (int)num;
-        return true;
-    }
-    return false;
+    *out = bits;
+    return true;
 }
 
 static void format_mods(int mods, char *buf, size_t cap) {
@@ -591,35 +576,19 @@ bool app_settings_load(app_settings *settings, const char *override) {
     }
 
     yyjson_val *keybindings = yyjson_obj_get(root, "keybindings");
-    for (size_t i = 0; i < sizeof loaded.keybindings / sizeof loaded.keybindings[0]; ++i) {
-        cui_key key = CUI_KEY_NONE;
-        int mods = 0;
-        yyjson_val *entry = yyjson_is_obj(keybindings)
-            ? yyjson_obj_get(keybindings, loaded.keybindings[i].id)
-            : NULL;
-        if (entry) {
-            if (yyjson_is_obj(entry)) {
-                yyjson_val *mods_val = yyjson_obj_get(entry, "mods");
-                bool mods_ok = mods_val ? parse_mods(mods_val, &mods) : true;
-                if (parse_key(yyjson_obj_get(entry, "key"), &key) && mods_ok &&
-                    (key != CUI_KEY_NONE || mods == 0)) {
-                    loaded.keybindings[i].combo = (cui_key_combo){ mods, key };
-                    applied = true;
-                }
+    if (yyjson_is_obj(keybindings)) {
+        for (size_t i = 0; i < sizeof loaded.keybindings / sizeof loaded.keybindings[0]; ++i) {
+            yyjson_val *entry = yyjson_obj_get(keybindings, loaded.keybindings[i].id);
+            if (!yyjson_is_obj(entry)) continue;
+            cui_key key = CUI_KEY_NONE;
+            int mods = 0;
+            yyjson_val *mods_val = yyjson_obj_get(entry, "mods");
+            bool mods_ok = mods_val ? parse_mods(mods_val, &mods) : true;
+            if (parse_key(yyjson_obj_get(entry, "key"), &key) && mods_ok &&
+                (key != CUI_KEY_NONE || mods == 0)) {
+                loaded.keybindings[i].combo = (cui_key_combo){ mods, key };
+                applied = true;
             }
-            continue;
-        }
-        /* Legacy flat "<id>_key" / "<id>_mods" format remains readable. */
-        char key_name[64], mods_name[64];
-        int kn = snprintf(key_name, sizeof key_name, "%s_key", loaded.keybindings[i].id);
-        int mn = snprintf(mods_name, sizeof mods_name, "%s_mods", loaded.keybindings[i].id);
-        if (kn > 0 && (size_t)kn < sizeof key_name &&
-            mn > 0 && (size_t)mn < sizeof mods_name &&
-            parse_key(yyjson_obj_get(root, key_name), &key) &&
-            parse_mods(yyjson_obj_get(root, mods_name), &mods) &&
-            (key != CUI_KEY_NONE || mods == 0)) {
-            loaded.keybindings[i].combo = (cui_key_combo){ mods, key };
-            applied = true;
         }
     }
     yyjson_doc_free(doc);
