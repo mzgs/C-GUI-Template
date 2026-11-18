@@ -2,22 +2,23 @@
 #include <cui/cui.h>
 #include <math.h>
 #include <ctype.h>
+#include "settings.h"
 
 #ifdef __APPLE__
 #include "macos_menu.h"
+static bool settings_save_failed;
 #endif
 
 static bool settings_open;
 static int settings_section;
-static char example_string[128] = "Example";
-static double example_number = 42;
 static char keybinding_filter[128];
-static struct {
-    const char *action;
-    cui_key_combo combo;
-} keybindings[] = {
-    { "Find", { CUI_MOD_PRIMARY, CUI_KEY_F } },
-    { "Save", { CUI_MOD_PRIMARY, CUI_KEY_S } },
+static app_settings settings = {
+    .example_string = "Example",
+    .example_number = 42,
+    .keybindings = {
+        { "find", "Find", { CUI_MOD_PRIMARY, CUI_KEY_F } },
+        { "save", "Save", { CUI_MOD_PRIMARY, CUI_KEY_S } },
+    },
 };
 
 static bool contains_ignore_case(const char *text, const char *query) {
@@ -35,9 +36,10 @@ static bool contains_ignore_case(const char *text, const char *query) {
 static void frame(cui_ctx *ui, void *user) {
     static const char *const sections[] = { "General", "Keybindings", "About" };
     static const char *const icons[] = { CUI_ICON_SETTINGS, CUI_ICON_KEYBOARD, CUI_ICON_INFO };
-    (void)user;
 #ifdef __APPLE__
     app_menu_install(&settings_open);
+#else
+    (void)user;
 #endif
     cui_vec2 size = cui_viewport_size(ui);
     cui_dialog(ui, "Settings", &settings_open, .width = size.x * 0.9f) {
@@ -58,16 +60,22 @@ static void frame(cui_ctx *ui, void *user) {
                 cui_separator(ui);
                 cui_scroll(ui, .id = "settings-page", .width = CUI_FILL) {
                     cui_column(ui, .height = CUI_FILL, .gap = 12) {
+                        bool changed = false;
                         cui_heading(ui, sections[settings_section], 4);
                         if (settings_section == 0) {
                             cui_row(ui, .gap = 16) {
                                 cui_text(ui, "Example string", .font = CUI_FONT_MEDIUM, .width = CUI_PX(168));
-                                cui_input(ui, "example-string", example_string, sizeof example_string,
-                                          .width = CUI_FILL);
+                                changed = (cui_input(ui, "example-string", settings.example_string,
+                                                     sizeof settings.example_string, .width = CUI_FILL) & CUI_CHANGED) != 0;
                             }
                             cui_row(ui, .gap = 16) {
                                 cui_text(ui, "Example number (0–100)", .font = CUI_FONT_MEDIUM, .width = CUI_PX(168));
-                                cui_number(ui, "example-number", &example_number, 0, 100, .width = CUI_FILL);
+                                double previous = settings.example_number;
+                                if (cui_number(ui, "example-number", &settings.example_number,
+                                               EXAMPLE_NUMBER_MIN, EXAMPLE_NUMBER_MAX, .width = CUI_FILL)) {
+                                    if (isfinite(settings.example_number)) changed = true;
+                                    else settings.example_number = previous;
+                                }
                             }
                         } else if (settings_section == 1) {
                             cui_table_column columns[] = {
@@ -80,19 +88,19 @@ static void frame(cui_ctx *ui, void *user) {
                             int visible = 0;
                             cui_table(ui, "keybindings", columns, 2, .striped = true, .compact = true,
                                       .height = CUI_FILL) {
-                                for (size_t i = 0; i < sizeof keybindings / sizeof keybindings[0]; ++i) {
-                                    if (!contains_ignore_case(keybindings[i].action, keybinding_filter) &&
-                                        !contains_ignore_case(cui_shortcut_label(ui, keybindings[i].combo),
-                                                              keybinding_filter)) continue;
+                                for (size_t i = 0; i < sizeof settings.keybindings / sizeof settings.keybindings[0]; ++i) {
+                                    const char *action = settings.keybindings[i].action;
+                                    cui_key_combo *combo = &settings.keybindings[i].combo;
+                                    if (!contains_ignore_case(action, keybinding_filter) &&
+                                        !contains_ignore_case(cui_shortcut_label(ui, *combo), keybinding_filter)) continue;
                                     ++visible;
                                     cui_table_row(ui, false);
-                                    cui_table_cell_text(ui, keybindings[i].action);
+                                    cui_table_cell_text(ui, action);
                                     cui_table_cell(ui);
                                     cui_theme *theme = cui_theme_get(ui);
                                     float control_height = theme->control_md;
                                     theme->control_md = theme->control_sm;
-                                    cui_shortcut_recorder(ui, keybindings[i].action,
-                                                          &keybindings[i].combo, .width = CUI_FILL);
+                                    if (cui_shortcut_recorder(ui, action, combo, .width = CUI_FILL)) changed = true;
                                     theme->control_md = control_height;
                                 }
                             }
@@ -102,6 +110,12 @@ static void frame(cui_ctx *ui, void *user) {
                             cui_secondary(ui, "Version " APP_VERSION);
                             cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");
                         }
+#ifdef __APPLE__
+                        if (changed) settings_save_failed = !app_settings_save(&settings, user);
+                        if (settings_save_failed) cui_secondary(ui, "Couldn’t save settings.");
+#else
+                        (void)changed;
+#endif
                     }
                 }
             }
@@ -110,6 +124,9 @@ static void frame(cui_ctx *ui, void *user) {
 }
 
 int main(void) {
+#ifdef __APPLE__
+    app_settings_load(&settings, NULL);
+#endif
     return cui_app_run(&(cui_app_desc){
         .title = "C GUI Template",
         .width = 900,
