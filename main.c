@@ -43,7 +43,7 @@ static void frame(cui_ctx *ui, void *user) {
     cui_vec2 size = cui_viewport_size(ui);
     cui_dialog(ui, "Settings", &settings_open, .width = size.x * 0.9f) {
         /* shortcut: pinned CUI adds 94pt for the header, padding and gap; revisit if its layout changes. */
-        cui_column(ui, .height = CUI_PX(fminf(size.y * 0.9f, size.y - 48) - 94), .gap = 16) {
+        cui_column(ui, .height = CUI_PX(fminf(size.y * 0.9f, size.y - 48) - 94)) {
             cui_row(ui, .height = CUI_FILL, .gap = 16, .align = CUI_ALIGN_STRETCH) {
                 cui_column(ui, .width = CUI_PCT(30), .min_width = 128, .max_width = 180,
                            .height = CUI_FILL) {
@@ -57,48 +57,47 @@ static void frame(cui_ctx *ui, void *user) {
                     }
                 }
                 cui_separator(ui);
-                cui_scroll(ui, .id = "settings-page", .width = CUI_FILL, .gap = 12) {
-                    cui_heading(ui, sections[settings_section], 4);
-                    if (settings_section == 0)
-                        cui_secondary(ui, "No general settings available yet.");
-                    else if (settings_section == 1) {
-                        cui_table_column columns[] = {
-                            { "Action", CUI_FILL, CUI_TEXT_LEFT, false },
-                            { "Keys", CUI_PX(240), CUI_TEXT_LEFT, false },
-                        };
-                        cui_secondary(ui, "Click a shortcut, then press a key combination. Backspace clears.");
-                        cui_secondary(ui, "Examples only. Edits last until the app closes.");
-                        cui_search(ui, "keybinding-filter", keybinding_filter, sizeof keybinding_filter,
-                                   .placeholder = "Filter actions or keys...", .width = CUI_FILL);
-                        int visible = 0;
-                        cui_table(ui, "keybindings", columns, 2, .striped = true, .compact = true) {
-                            for (size_t i = 0; i < sizeof keybindings / sizeof keybindings[0]; ++i) {
-                                if (!contains_ignore_case(keybindings[i].action, keybinding_filter) &&
-                                    !contains_ignore_case(cui_shortcut_label(ui, keybindings[i].combo),
-                                                          keybinding_filter)) continue;
-                                ++visible;
-                                cui_table_row(ui, false);
-                                cui_table_cell_text(ui, keybindings[i].action);
-                                cui_table_cell(ui);
-                                cui_theme *theme = cui_theme_get(ui);
-                                float control_height = theme->control_md;
-                                theme->control_md = theme->control_sm;
-                                cui_shortcut_recorder(ui, keybindings[i].action,
-                                                      &keybindings[i].combo, .width = CUI_FILL);
-                                theme->control_md = control_height;
+                cui_scroll(ui, .id = "settings-page", .width = CUI_FILL) {
+                    cui_column(ui, .height = CUI_FILL, .gap = 12) {
+                        cui_heading(ui, sections[settings_section], 4);
+                        if (settings_section == 0)
+                            cui_secondary(ui, "No general settings available yet.");
+                        else if (settings_section == 1) {
+                            cui_table_column columns[] = {
+                                { "Action", CUI_FILL, CUI_TEXT_LEFT, false },
+                                { "Keys", CUI_PX(240), CUI_TEXT_LEFT, false },
+                            };
+                            cui_secondary(ui, "Click a shortcut, then press a key combination. Backspace clears.");
+                            cui_secondary(ui, "Examples only. Edits last until the app closes.");
+                            cui_search(ui, "keybinding-filter", keybinding_filter, sizeof keybinding_filter,
+                                       .placeholder = "Filter actions or keys...", .width = CUI_FILL);
+                            int visible = 0;
+                            cui_table(ui, "keybindings", columns, 2, .striped = true, .compact = true,
+                                      .height = CUI_FILL) {
+                                for (size_t i = 0; i < sizeof keybindings / sizeof keybindings[0]; ++i) {
+                                    if (!contains_ignore_case(keybindings[i].action, keybinding_filter) &&
+                                        !contains_ignore_case(cui_shortcut_label(ui, keybindings[i].combo),
+                                                              keybinding_filter)) continue;
+                                    ++visible;
+                                    cui_table_row(ui, false);
+                                    cui_table_cell_text(ui, keybindings[i].action);
+                                    cui_table_cell(ui);
+                                    cui_theme *theme = cui_theme_get(ui);
+                                    float control_height = theme->control_md;
+                                    theme->control_md = theme->control_sm;
+                                    cui_shortcut_recorder(ui, keybindings[i].action,
+                                                          &keybindings[i].combo, .width = CUI_FILL);
+                                    theme->control_md = control_height;
+                                }
                             }
+                            if (!visible) cui_secondary(ui, "No shortcuts match your filter.");
+                        } else {
+                            cui_text(ui, "C GUI Template");
+                            cui_secondary(ui, "Version " APP_VERSION);
+                            cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");
                         }
-                        if (!visible) cui_secondary(ui, "No shortcuts match your filter.");
-                    } else {
-                        cui_text(ui, "C GUI Template");
-                        cui_secondary(ui, "Version " APP_VERSION);
-                        cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");
                     }
                 }
-            }
-            cui_dialog_footer(ui) {
-                if (cui_button(ui, "Done", .variant = CUI_BUTTON_PRIMARY))
-                    settings_open = false;
             }
         }
     }
