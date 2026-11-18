@@ -6,12 +6,20 @@
 #include <assert.h>
 #include <math.h>
 
+static void press_settings_key(cui_ctx *ui, cui_key key, int mods) {
+    cui_input_key(ui, key, true, mods);
+    cui_begin_frame(ui, 1.0f / 60);
+    frame(ui, NULL);
+    cui_end_frame(ui);
+}
+
 static void check_settings_size(float width, float height, cui_theme_mode theme) {
     cui_ctx *ui = cui_create(&(cui_ctx_desc){ .theme = theme });
     assert(ui);
     cui_set_viewport(ui, width, height, 1);
     cui_set_reduced_motion(ui, true);
     settings_open = true;
+    settings_section = 0;
     cui_begin_frame(ui, 1.0f / 60);
     frame(ui, NULL);
     cui_end_frame(ui);
@@ -25,6 +33,18 @@ static void check_settings_size(float width, float height, cui_theme_mode theme)
             found_panel = true;
     }
     assert(found_panel);
+    press_settings_key(ui, CUI_KEY_TAB, 0);
+    press_settings_key(ui, CUI_KEY_TAB, 0);
+    press_settings_key(ui, CUI_KEY_TAB, 0);
+    press_settings_key(ui, CUI_KEY_ENTER, 0);
+    assert(settings_section == 1);
+    press_settings_key(ui, CUI_KEY_TAB, 0);
+    press_settings_key(ui, CUI_KEY_ENTER, 0);
+    assert(settings_section == 2);
+    press_settings_key(ui, CUI_KEY_TAB, CUI_MOD_SHIFT);
+    press_settings_key(ui, CUI_KEY_TAB, CUI_MOD_SHIFT);
+    press_settings_key(ui, CUI_KEY_ENTER, 0);
+    assert(settings_section == 0);
     cui_destroy(ui);
     settings_open = false;
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(c_gui_template LANGUAGES C)
+project(c_gui_template VERSION 0.1.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -11,6 +11,7 @@ FetchContent_Declare(cui
 FetchContent_MakeAvailable(cui)
 
 add_executable(empty_gui MACOSX_BUNDLE main.c)
+target_compile_definitions(empty_gui PRIVATE APP_VERSION=\"${PROJECT_VERSION}\")
 target_link_libraries(empty_gui PRIVATE cui::cui)
 cui_app_target(empty_gui)
 if(APPLE)
@@ -19,7 +20,9 @@ if(APPLE)
     set_source_files_properties(macos_menu.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(empty_gui PROPERTIES
         OUTPUT_NAME "C GUI Template"
-        MACOSX_BUNDLE_BUNDLE_NAME "C GUI Template")
+        MACOSX_BUNDLE_BUNDLE_NAME "C GUI Template"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+        MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
 endif()
 
 include(CTest)
@@ -31,6 +34,7 @@ if(BUILD_TESTING)
         TIMEOUT 15 PASS_REGULAR_EXPRESSION "cui: saved")
     if(APPLE)
         add_executable(macos_menu_test tests/macos_menu_test.m macos_menu.m)
+        target_compile_definitions(macos_menu_test PRIVATE APP_VERSION=\"${PROJECT_VERSION}\")
         target_link_libraries(macos_menu_test PRIVATE cui::cui)
         add_test(NAME macos_menu COMMAND macos_menu_test)
         set_tests_properties(macos_menu PROPERTIES TIMEOUT 15 RUN_SERIAL TRUE)
