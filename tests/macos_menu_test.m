@@ -5,6 +5,7 @@
 #undef NDEBUG
 #include <assert.h>
 #include <math.h>
+#include <string.h>
 
 static void press_settings_key(cui_ctx *ui, cui_key key, int mods) {
     cui_input_key(ui, key, true, mods);
@@ -49,7 +50,47 @@ static void check_settings_size(float width, float height, cui_theme_mode theme)
     settings_open = false;
 }
 
+static void check_keybinding_edit(cui_theme_mode theme) {
+    cui_ctx *ui = cui_create(&(cui_ctx_desc){ .theme = theme });
+    assert(ui);
+    cui_set_viewport(ui, 900, 600, 1);
+    cui_set_reduced_motion(ui, true);
+    settings_open = true;
+    settings_section = 1;
+    strcpy(keybinding_filter, "pAsT");
+    cui_key_combo original = keybindings[1].combo;
+    cui_begin_frame(ui, 1.0f / 60);
+    frame(ui, NULL);
+    cui_end_frame(ui);
+    /* Close, three sidebar items, filter and its clear button, then the recorder. */
+    for (int i = 0; i < 7; ++i) press_settings_key(ui, CUI_KEY_TAB, 0);
+    press_settings_key(ui, CUI_KEY_ENTER, 0);
+    press_settings_key(ui, CUI_KEY_K, CUI_MOD_PRIMARY | CUI_MOD_SHIFT);
+    assert(keybindings[1].combo.key == CUI_KEY_K);
+    assert(keybindings[1].combo.mods == (CUI_MOD_PRIMARY | CUI_MOD_SHIFT));
+    assert(keybindings[0].combo.key == CUI_KEY_C);
+    press_settings_key(ui, CUI_KEY_ENTER, 0);
+    press_settings_key(ui, CUI_KEY_ESCAPE, 0);
+    assert(settings_open);
+    assert(keybindings[1].combo.key == CUI_KEY_K);
+    press_settings_key(ui, CUI_KEY_ENTER, 0);
+    press_settings_key(ui, CUI_KEY_BACKSPACE, 0);
+    assert(keybindings[1].combo.key == CUI_KEY_NONE);
+    assert(keybindings[1].combo.mods == 0);
+    keybindings[1].combo = original;
+    keybinding_filter[0] = '\0';
+    cui_destroy(ui);
+    settings_open = false;
+}
+
 int main(void) {
+    assert(contains_ignore_case("Copy", ""));
+    assert(contains_ignore_case("", ""));
+    assert(contains_ignore_case("Paste", "pAsT"));
+    assert(contains_ignore_case("Cmd Shift K", "shift k"));
+    assert(!contains_ignore_case("Copy", "Copying"));
+    assert(!contains_ignore_case("", "Copy"));
+    assert(!contains_ignore_case("Copy", "xyz"));
     @autoreleasepool {
         cui_app *app = cui_app_create(&(cui_app_desc){ .hidden = true });
         assert(app);
@@ -88,6 +129,8 @@ int main(void) {
         check_settings_size(360, 280, CUI_THEME_LIGHT);
         check_settings_size(900, 600, CUI_THEME_DARK);
         check_settings_size(360, 280, CUI_THEME_DARK);
+        check_keybinding_edit(CUI_THEME_LIGHT);
+        check_keybinding_edit(CUI_THEME_DARK);
     }
     return 0;
 }

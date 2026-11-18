@@ -1,6 +1,7 @@
 #include <cui/cui_app.h>
 #include <cui/cui.h>
 #include <math.h>
+#include <ctype.h>
 
 #ifdef __APPLE__
 #include "macos_menu.h"
@@ -8,6 +9,29 @@
 
 static bool settings_open;
 static int settings_section;
+static char keybinding_filter[128];
+static struct {
+    const char *action;
+    cui_key_combo combo;
+} keybindings[] = {
+    { "Copy", { CUI_MOD_PRIMARY, CUI_KEY_C } },
+    { "Paste", { CUI_MOD_PRIMARY, CUI_KEY_V } },
+    { "Undo", { CUI_MOD_PRIMARY, CUI_KEY_Z } },
+    { "Find", { CUI_MOD_PRIMARY, CUI_KEY_F } },
+    { "Save", { CUI_MOD_PRIMARY, CUI_KEY_S } },
+};
+
+static bool contains_ignore_case(const char *text, const char *query) {
+    for (; *text; ++text) {
+        const char *a = text, *b = query;
+        while (*a && *b && tolower((unsigned char)*a) == tolower((unsigned char)*b)) {
+            ++a;
+            ++b;
+        }
+        if (!*b) return true;
+    }
+    return !*query;
+}
 
 static void frame(cui_ctx *ui, void *user) {
     static const char *const sections[] = { "General", "Keybindings", "About" };
@@ -37,9 +61,35 @@ static void frame(cui_ctx *ui, void *user) {
                     cui_heading(ui, sections[settings_section], 4);
                     if (settings_section == 0)
                         cui_secondary(ui, "No general settings available yet.");
-                    else if (settings_section == 1)
-                        cui_secondary(ui, "No custom keybindings configured.");
-                    else {
+                    else if (settings_section == 1) {
+                        cui_table_column columns[] = {
+                            { "Action", CUI_FILL, CUI_TEXT_LEFT, false },
+                            { "Keys", CUI_PX(240), CUI_TEXT_LEFT, false },
+                        };
+                        cui_secondary(ui, "Click a shortcut, then press a key combination. Backspace clears.");
+                        cui_secondary(ui, "Examples only. Edits last until the app closes.");
+                        cui_search(ui, "keybinding-filter", keybinding_filter, sizeof keybinding_filter,
+                                   .placeholder = "Filter actions or keys...", .width = CUI_FILL);
+                        int visible = 0;
+                        cui_table(ui, "keybindings", columns, 2, .striped = true, .compact = true) {
+                            for (size_t i = 0; i < sizeof keybindings / sizeof keybindings[0]; ++i) {
+                                if (!contains_ignore_case(keybindings[i].action, keybinding_filter) &&
+                                    !contains_ignore_case(cui_shortcut_label(ui, keybindings[i].combo),
+                                                          keybinding_filter)) continue;
+                                ++visible;
+                                cui_table_row(ui, false);
+                                cui_table_cell_text(ui, keybindings[i].action);
+                                cui_table_cell(ui);
+                                cui_theme *theme = cui_theme_get(ui);
+                                float control_height = theme->control_md;
+                                theme->control_md = theme->control_sm;
+                                cui_shortcut_recorder(ui, keybindings[i].action,
+                                                      &keybindings[i].combo, .width = CUI_FILL);
+                                theme->control_md = control_height;
+                            }
+                        }
+                        if (!visible) cui_secondary(ui, "No shortcuts match your filter.");
+                    } else {
                         cui_text(ui, "C GUI Template");
                         cui_secondary(ui, "Version " APP_VERSION);
                         cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");

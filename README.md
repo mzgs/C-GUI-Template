@@ -14,7 +14,10 @@ rebuild changed files before launching. When nothing changed, it runs the existi
 app without recompiling. A failed build stops the script before launch.
 
 On macOS, choose **C GUI Template → Settings…** or press **⌘,** to open
-the Settings dialog. It has no configurable options yet.
+the Settings dialog. On its Keybindings page, filter by action or key combination
+(case-insensitive), then click a shortcut and press a key
+combination to change it, or press Backspace to clear it. Edits last for the current
+session; these example bindings do not register app actions.
 
 Requires Git, CMake 3.14+, and a C compiler with the system SDK. On macOS,
 install Xcode Command Line Tools and CMake. Linux also needs X11 development
