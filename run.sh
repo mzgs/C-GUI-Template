@@ -7,4 +7,4 @@ if [ ! -f build/CMakeCache.txt ]; then
     cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 fi
 cmake --build build --config Release --target empty_gui --parallel
-exec ./build/empty_gui.app/Contents/MacOS/empty_gui
+exec "./build/C GUI Template.app/Contents/MacOS/C GUI Template"

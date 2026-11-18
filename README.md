@@ -28,7 +28,7 @@ access. Its examples, tests, and optional add-ons are excluded by default.
 Run on macOS:
 
 ```sh
-open build/empty_gui.app
+open "build/C GUI Template.app"
 ```
 
 Run on Linux: `./build/empty_gui`. With Visual Studio on Windows:
