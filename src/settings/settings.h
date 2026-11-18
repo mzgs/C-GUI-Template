@@ -4,7 +4,6 @@
 #include <cui/cui.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include "platform.h"
 
 enum {
     EXAMPLE_NUMBER_MIN = 0,

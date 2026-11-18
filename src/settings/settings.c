@@ -3,6 +3,7 @@
 #endif
 
 #include "settings.h"
+#include "platform.h"
 #include <yyjson.h>
 #include <ctype.h>
 #include <errno.h>
@@ -206,6 +207,22 @@ static double json_number(yyjson_val *value) {
     return yyjson_is_num(value) ? yyjson_get_num(value) : NAN;
 }
 
+static const char *json_cstr(yyjson_val *value, size_t *out_len) {
+    if (!yyjson_is_str(value)) return NULL;
+    const char *text = yyjson_get_str(value);
+    size_t len = yyjson_get_len(value);
+    if (!text || memchr(text, '\0', len)) return NULL;
+    if (out_len) *out_len = len;
+    return text;
+}
+
+static bool json_int_in_range(yyjson_val *value, int min, int max, int *out) {
+    double n = json_number(value);
+    if (!(n >= min && n <= max && n == floor(n))) return false;
+    *out = (int)n;
+    return true;
+}
+
 static bool str_eq_ignore_case(const char *a, const char *b) {
     while (*a && *b) {
         if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return false;
@@ -216,10 +233,8 @@ static bool str_eq_ignore_case(const char *a, const char *b) {
 }
 
 static bool parse_theme_mode(yyjson_val *value, app_theme_mode *out) {
-    if (!yyjson_is_str(value)) return false;
-    const char *text = yyjson_get_str(value);
-    size_t len = yyjson_get_len(value);
-    if (!text || memchr(text, '\0', len)) return false;
+    const char *text = json_cstr(value, NULL);
+    if (!text) return false;
     for (int i = 0; i < APP_THEME_COUNT; ++i) {
         if (str_eq_ignore_case(text, theme_names[i])) {
             *out = (app_theme_mode)i;
@@ -230,10 +245,8 @@ static bool parse_theme_mode(yyjson_val *value, app_theme_mode *out) {
 }
 
 static bool parse_accent(yyjson_val *value, cui_accent *out) {
-    if (!yyjson_is_str(value)) return false;
-    const char *text = yyjson_get_str(value);
-    size_t len = yyjson_get_len(value);
-    if (!text || memchr(text, '\0', len)) return false;
+    const char *text = json_cstr(value, NULL);
+    if (!text) return false;
     for (int i = 0; i < CUI_ACCENT_COUNT; ++i) {
         if (str_eq_ignore_case(text, cui_accent_name((cui_accent)i))) {
             *out = (cui_accent)i;
@@ -244,10 +257,9 @@ static bool parse_accent(yyjson_val *value, cui_accent *out) {
 }
 
 static bool parse_key(yyjson_val *value, cui_key *out) {
-    if (!yyjson_is_str(value)) return false;
-    const char *text = yyjson_get_str(value);
-    size_t len = yyjson_get_len(value);
-    if (!text || memchr(text, '\0', len)) return false;
+    size_t len = 0;
+    const char *text = json_cstr(value, &len);
+    if (!text) return false;
     if (len == 0) {
         *out = CUI_KEY_NONE;
         return true;
@@ -262,10 +274,8 @@ static bool parse_key(yyjson_val *value, cui_key *out) {
 }
 
 static bool parse_mods(yyjson_val *value, int *out) {
-    if (!yyjson_is_str(value)) return false;
-    const char *text = yyjson_get_str(value);
-    size_t len = yyjson_get_len(value);
-    if (!text || memchr(text, '\0', len)) return false;
+    const char *text = json_cstr(value, NULL);
+    if (!text) return false;
     int bits = 0;
     const char *p = text;
     while (*p) {
@@ -323,10 +333,9 @@ bool app_settings_load(app_settings *settings, const char *override) {
     app_settings loaded = *settings;
     bool applied = false;
 
-    yyjson_val *value = yyjson_obj_get(root, "example_string");
-    const char *text = yyjson_get_str(value);
-    size_t len = yyjson_get_len(value);
-    if (text && len < sizeof loaded.example_string && !memchr(text, '\0', len)) {
+    size_t len = 0;
+    const char *text = json_cstr(yyjson_obj_get(root, "example_string"), &len);
+    if (text && len < sizeof loaded.example_string) {
         memcpy(loaded.example_string, text, len + 1);
         applied = true;
     }
@@ -338,14 +347,10 @@ bool app_settings_load(app_settings *settings, const char *override) {
 
     yyjson_val *appearance = yyjson_obj_get(root, "appearance");
     if (yyjson_is_obj(appearance)) {
-        app_theme_mode mode = loaded.appearance.theme_mode;
-        if (parse_theme_mode(yyjson_obj_get(appearance, "theme"), &mode)) {
-            loaded.appearance.theme_mode = mode;
+        if (parse_theme_mode(yyjson_obj_get(appearance, "theme"), &loaded.appearance.theme_mode)) {
             applied = true;
         }
-        cui_accent accent = loaded.appearance.accent;
-        if (parse_accent(yyjson_obj_get(appearance, "accent"), &accent)) {
-            loaded.appearance.accent = accent;
+        if (parse_accent(yyjson_obj_get(appearance, "accent"), &loaded.appearance.accent)) {
             applied = true;
         }
         double scale = json_number(yyjson_obj_get(appearance, "font_scale"));
@@ -364,23 +369,18 @@ bool app_settings_load(app_settings *settings, const char *override) {
 
     yyjson_val *window = yyjson_obj_get(root, "window");
     if (yyjson_is_obj(window)) {
-        double wx = json_number(yyjson_obj_get(window, "x"));
-        double wy = json_number(yyjson_obj_get(window, "y"));
-        if (wx >= APP_WINDOW_POS_MIN && wx <= APP_WINDOW_POS_MAX && wx == floor(wx) &&
-            wy >= APP_WINDOW_POS_MIN && wy <= APP_WINDOW_POS_MAX && wy == floor(wy)) {
+        int wx = 0, wy = 0;
+        if (json_int_in_range(yyjson_obj_get(window, "x"), APP_WINDOW_POS_MIN, APP_WINDOW_POS_MAX, &wx) &&
+            json_int_in_range(yyjson_obj_get(window, "y"), APP_WINDOW_POS_MIN, APP_WINDOW_POS_MAX, &wy)) {
             loaded.window.has_pos = true;
-            loaded.window.x = (int)wx;
-            loaded.window.y = (int)wy;
+            loaded.window.x = wx;
+            loaded.window.y = wy;
             applied = true;
         }
-        double width = json_number(yyjson_obj_get(window, "width"));
-        if (width >= WINDOW_WIDTH_MIN && width <= WINDOW_WIDTH_MAX && width == floor(width)) {
-            loaded.window.width = (int)width;
+        if (json_int_in_range(yyjson_obj_get(window, "width"), WINDOW_WIDTH_MIN, WINDOW_WIDTH_MAX, &loaded.window.width)) {
             applied = true;
         }
-        double height = json_number(yyjson_obj_get(window, "height"));
-        if (height >= WINDOW_HEIGHT_MIN && height <= WINDOW_HEIGHT_MAX && height == floor(height)) {
-            loaded.window.height = (int)height;
+        if (json_int_in_range(yyjson_obj_get(window, "height"), WINDOW_HEIGHT_MIN, WINDOW_HEIGHT_MAX, &loaded.window.height)) {
             applied = true;
         }
         yyjson_val *fullscreen = yyjson_obj_get(window, "fullscreen");
@@ -392,7 +392,7 @@ bool app_settings_load(app_settings *settings, const char *override) {
 
     yyjson_val *keybindings = yyjson_obj_get(root, "keybindings");
     if (yyjson_is_obj(keybindings)) {
-        for (size_t i = 0; i < sizeof loaded.keybindings / sizeof loaded.keybindings[0]; ++i) {
+        for (int i = 0; i < APP_ACTION_COUNT; ++i) {
             yyjson_val *entry = yyjson_obj_get(keybindings, loaded.keybindings[i].id);
             if (!yyjson_is_obj(entry)) continue;
             cui_key key = CUI_KEY_NONE;
@@ -449,7 +449,7 @@ bool app_settings_save(const app_settings *settings, const char *override) {
 
     yyjson_mut_val *keybindings = ok ? yyjson_mut_obj(doc) : NULL;
     ok = ok && keybindings && yyjson_mut_obj_add_val(doc, root, "keybindings", keybindings);
-    for (size_t i = 0; ok && i < sizeof settings->keybindings / sizeof settings->keybindings[0]; ++i) {
+    for (int i = 0; ok && i < APP_ACTION_COUNT; ++i) {
         cui_key_combo combo = settings->keybindings[i].combo;
         char mods_buf[32];
         format_mods(combo.mods, mods_buf, sizeof mods_buf);

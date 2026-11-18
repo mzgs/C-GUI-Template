@@ -1,5 +1,4 @@
 #include "chrome_internal.h"
-#include "platform.h"
 #include <math.h>
 #include <stdio.h>
 
@@ -14,16 +13,11 @@ static void setting_row_begin(cui_ctx *ui, const char *label, bool compact, bool
 
 static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) {
     bool changed = false;
-    bool (*dialog_fn)(const cui_file_dialog_opts *, char *, size_t) =
-        chrome->file_dialog ? chrome->file_dialog : chrome_default_file_dialog;
 
     setting_row_begin(ui, "Example string", compact, false);
     int flags = cui_input(ui, "example-string", chrome->settings.example_string,
                           sizeof chrome->settings.example_string, .width = CUI_FILL);
-    if (flags & CUI_CHANGED) {
-        chrome->settings_dirty = true;
-        chrome->status = NULL;
-    }
+    if (flags & CUI_CHANGED) chrome->settings_dirty = true;
     if (chrome->settings_dirty && (flags & (CUI_SUBMITTED | CUI_BLURRED))) changed = true;
     cui_box_end(ui);
 
@@ -33,7 +27,6 @@ static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) 
                    EXAMPLE_NUMBER_MIN, EXAMPLE_NUMBER_MAX, .width = CUI_FILL)) {
         if (isfinite(chrome->settings.example_number)) {
             changed = true;
-            chrome->status = NULL;
         } else {
             chrome->settings.example_number = previous;
         }
@@ -46,7 +39,7 @@ static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) 
     cui_row(ui, .width = CUI_FILL, .gap = 8, .wrap = true) {
         if (cui_button(ui, "Import…", .icon = CUI_ICON_UPLOAD)) {
             char path[4096];
-            if (dialog_fn(&(cui_file_dialog_opts){
+            if (cui_app_file_dialog(NULL, &(cui_file_dialog_opts){
                     .kind = CUI_FILE_OPEN,
                     .title = "Import Settings",
                     .filter_name = "JSON",
@@ -54,7 +47,6 @@ static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) 
                 }, path, sizeof path)) {
                 if (app_settings_load(&chrome->settings, path)) {
                     chrome_reload_appearance(chrome, ui);
-                    chrome->settings_dirty = false;
                     changed = false;
                     if (chrome_save_settings(chrome, ui))
                         app_chrome_notify(chrome, ui, "Settings imported.", CUI_TONE_SUCCESS);
@@ -65,7 +57,7 @@ static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) 
         }
         if (cui_button(ui, "Export…", .icon = CUI_ICON_DOWNLOAD)) {
             char path[4096];
-            if (dialog_fn(&(cui_file_dialog_opts){
+            if (cui_app_file_dialog(NULL, &(cui_file_dialog_opts){
                     .kind = CUI_FILE_SAVE,
                     .title = "Export Settings",
                     .filter_name = "JSON",
@@ -86,20 +78,9 @@ static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) 
 
     setting_row_begin(ui, "Reset settings", compact, false);
     if (cui_confirm_button(ui, "Reset", .icon = CUI_ICON_ROTATE_CCW, .confirm_label = "Confirm")) {
-        chrome->settings = app_chrome_default_settings();
+        chrome->settings = chrome_default_settings();
         chrome_reload_appearance(chrome, ui);
-        if (cui_app_ui(NULL) == ui) {
-            if (cui_app_is_fullscreen(NULL)) cui_app_set_fullscreen(NULL, false);
-            cui_app_set_size(NULL, chrome->settings.window.width, chrome->settings.window.height);
-            void *native = cui_app_native_window(NULL);
-            const char *backend = cui_app_backend(NULL);
-            app_window_center(native, backend);
-            int x = 0, y = 0;
-            chrome->observed_window_has_pos = app_window_get_pos(native, backend, &x, &y);
-            chrome->observed_window_x = x;
-            chrome->observed_window_y = y;
-        }
-        chrome->settings_dirty = false;
+        chrome_reset_window(chrome, ui);
         changed = false;
         if (chrome_save_settings(chrome, ui))
             app_chrome_notify(chrome, ui, "Settings reset to defaults.", CUI_TONE_INFO);
@@ -111,9 +92,6 @@ static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) 
 
 static bool draw_appearance_section(app_chrome *chrome, cui_ctx *ui, bool compact) {
     static const char *const theme_labels[APP_THEME_COUNT] = { "System", "Light", "Dark" };
-    static const char *const theme_icons[APP_THEME_COUNT] = {
-        CUI_ICON_MONITOR, CUI_ICON_SUN, CUI_ICON_MOON
-    };
     static const char *const accent_labels[CUI_ACCENT_COUNT] = {
         "Neutral", "Violet", "Blue", "Green", "Amber", "Orange", "Coral", "Rose"
     };
@@ -123,9 +101,9 @@ static bool draw_appearance_section(app_chrome *chrome, cui_ctx *ui, bool compac
     int mode = (int)chrome->settings.appearance.theme_mode;
     bool theme_changed = compact
         ? cui_select(ui, "theme-mode", theme_labels, APP_THEME_COUNT, &mode,
-                     .icons = theme_icons, .width = CUI_FILL)
+                     .icons = chrome_theme_icons, .width = CUI_FILL)
         : cui_segmented(ui, "theme-mode", theme_labels, APP_THEME_COUNT, &mode,
-                        .icons = theme_icons);
+                        .icons = chrome_theme_icons);
     if (theme_changed) {
         chrome->settings.appearance.theme_mode = (app_theme_mode)mode;
         chrome->env_theme_override = false;
@@ -228,15 +206,13 @@ static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
     cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");
     cui_separator(ui);
     const char *backend = cui_app_backend(NULL);
-    const char *renderer = cui_app_ui(NULL)
-        ? (cui_app_is_software(NULL) ? "Software" : "OpenGL")
-        : "Headless";
+    const char *renderer = cui_app_is_software(NULL) ? "Software" : "OpenGL";
     char runtime_info[128];
     snprintf(runtime_info, sizeof runtime_info, "Backend: %s  ·  Renderer: %s",
              backend ? backend : "unknown", renderer);
     cui_secondary(ui, runtime_info);
     char dir[4096];
-    if (app_settings_dir(dir, sizeof dir, chrome->settings_path, false)) {
+    if (app_settings_dir(dir, sizeof dir, chrome->cli.settings_path, false)) {
         cui_secondary(ui, dir);
     }
     cui_row(ui, .gap = 8, .wrap = true) {
@@ -247,13 +223,6 @@ static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
 }
 
 void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
-    static const char *const sections[SETTINGS_SECTION_COUNT] = {
-        "General", "Appearance", "Keybindings", "About"
-    };
-    static const char *const icons[SETTINGS_SECTION_COUNT] = {
-        CUI_ICON_SETTINGS, CUI_ICON_PALETTE, CUI_ICON_KEYBOARD, CUI_ICON_INFO
-    };
-
     cui_vec2 size = cui_viewport_size(ui);
     bool compact = size.x < 600.0f;
 
@@ -266,10 +235,9 @@ void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
                     cui_scroll(ui, .id = "settings-sidebar", .gap = 4) {
                         for (int i = 0; i < SETTINGS_SECTION_COUNT; ++i) {
                             if (i == SETTINGS_SECTION_ABOUT) cui_separator(ui);
-                            if (cui_nav_item(ui, sections[i], .icon = icons[i],
+                            if (cui_nav_item(ui, chrome_section_labels[i], .icon = chrome_section_icons[i],
                                              .selected = chrome->settings_section == i,
                                              .group = "settings-sections")) {
-                                if (chrome->settings_section != i) chrome->status = NULL;
                                 chrome->settings_section = i;
                             }
                         }
@@ -280,7 +248,7 @@ void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
                     cui_column(ui, .height = chrome->settings_section == SETTINGS_SECTION_KEYBINDINGS ? CUI_FILL : CUI_FIT,
                                .gap = 12) {
                         bool changed = false;
-                        cui_heading(ui, sections[chrome->settings_section], 4);
+                        cui_heading(ui, chrome_section_labels[chrome->settings_section], 4);
                         switch (chrome->settings_section) {
                         case SETTINGS_SECTION_GENERAL:
                             changed = draw_general_section(chrome, ui, compact);
@@ -297,7 +265,6 @@ void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
                         }
                         if (changed || (chrome->settings_dirty && chrome->settings_section != SETTINGS_SECTION_GENERAL)) {
                             chrome_save_settings(chrome, ui);
-                            chrome->settings_dirty = false;
                         }
                         if (chrome->settings_save_failed) cui_secondary(ui, "Couldn’t save settings.");
                     }
@@ -305,12 +272,7 @@ void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
             }
         }
     }
-    if (!chrome->settings_open) {
-        if (chrome->prev_settings_open) chrome->status = NULL;
-        if (chrome->settings_dirty) {
-            chrome_save_settings(chrome, ui);
-            chrome->settings_dirty = false;
-        }
+    if (!chrome->settings_open && chrome->settings_dirty) {
+        chrome_save_settings(chrome, ui);
     }
-    chrome->prev_settings_open = chrome->settings_open;
 }

@@ -49,13 +49,8 @@ static NSString *macos_key_equivalent(cui_key key, bool *is_function_key) {
 
 static void macos_apply_key_combo(NSMenuItem *item, cui_key_combo combo) {
     if (!item) return;
-    if (combo.key == CUI_KEY_NONE) {
-        item.keyEquivalent = @"";
-        item.keyEquivalentModifierMask = 0;
-        return;
-    }
     bool is_fn = false;
-    NSString *equiv = macos_key_equivalent(combo.key, &is_fn);
+    NSString *equiv = combo.key != CUI_KEY_NONE ? macos_key_equivalent(combo.key, &is_fn) : @"";
     if (!equiv.length ||
         (!is_fn && !(combo.mods & (CUI_MOD_SUPER | CUI_MOD_CTRL | CUI_MOD_ALT)))) {
         item.keyEquivalent = @"";
@@ -69,6 +64,10 @@ static void macos_apply_key_combo(NSMenuItem *item, cui_key_combo combo) {
     if (combo.mods & CUI_MOD_SHIFT) mask |= NSEventModifierFlagShift;
     item.keyEquivalent = equiv;
     item.keyEquivalentModifierMask = mask;
+}
+
+static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo next, bool force) {
+    if (force || !combo_equal(prev, next)) macos_apply_key_combo(item, next);
 }
 
 @interface AppMenuTarget : NSObject <NSMenuItemValidation>
@@ -89,14 +88,10 @@ static void macos_apply_key_combo(NSMenuItem *item, cui_key_combo combo) {
 @property(nonatomic, assign) app_menu_state lastState;
 - (void)showAbout:(id)sender;
 - (void)showSettings:(id)sender;
-- (void)triggerSave:(id)sender;
-- (void)triggerFind:(id)sender;
+- (void)triggerAction:(NSMenuItem *)sender;
 - (void)triggerPalette:(id)sender;
 - (void)toggleFullscreen:(id)sender;
-- (void)editCut:(id)sender;
-- (void)editCopy:(id)sender;
-- (void)editPaste:(id)sender;
-- (void)editSelectAll:(id)sender;
+- (void)triggerEditKey:(NSMenuItem *)sender;
 - (void)windowDidMove:(NSNotification *)note;
 - (void)appWillTerminate:(NSNotification *)note;
 @end
@@ -134,15 +129,8 @@ static void macos_apply_key_combo(NSMenuItem *item, cui_key_combo combo) {
     [self requestRedraw];
 }
 
-- (void)triggerSave:(id)sender {
-    (void)sender;
-    if (self.onAction) self.onAction(APP_ACTION_SAVE, self.user);
-    [self requestRedraw];
-}
-
-- (void)triggerFind:(id)sender {
-    (void)sender;
-    if (self.onAction) self.onAction(APP_ACTION_FIND, self.user);
+- (void)triggerAction:(NSMenuItem *)sender {
+    if (self.onAction) self.onAction((app_action)sender.tag, self.user);
     [self requestRedraw];
 }
 
@@ -159,32 +147,13 @@ static void macos_apply_key_combo(NSMenuItem *item, cui_key_combo combo) {
     [self requestRedraw];
 }
 
-- (void)editCut:(id)sender {
-    (void)sender;
-    if (self.onEditKey) self.onEditKey(CUI_KEY_X, self.user);
-    [self requestRedraw];
-}
-
-- (void)editCopy:(id)sender {
-    (void)sender;
-    if (self.onEditKey) self.onEditKey(CUI_KEY_C, self.user);
-    [self requestRedraw];
-}
-
-- (void)editPaste:(id)sender {
-    (void)sender;
-    if (self.onEditKey) self.onEditKey(CUI_KEY_V, self.user);
-    [self requestRedraw];
-}
-
-- (void)editSelectAll:(id)sender {
-    (void)sender;
-    if (self.onEditKey) self.onEditKey(CUI_KEY_A, self.user);
+- (void)triggerEditKey:(NSMenuItem *)sender {
+    if (self.onEditKey) self.onEditKey((cui_key)sender.tag, self.user);
     [self requestRedraw];
 }
 
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
-    if (item.action == @selector(triggerSave:) || item.action == @selector(triggerFind:)) {
+    if (item.action == @selector(triggerAction:)) {
         bool blocked = (self.settingsOpen && *self.settingsOpen) ||
                        (self.paletteOpen && *self.paletteOpen);
         return !blocked;
@@ -207,10 +176,11 @@ static void macos_apply_key_combo(NSMenuItem *item, cui_key_combo combo) {
 static AppMenuTarget *shared_menu_target;
 
 static NSMenuItem *make_item(NSString *title, SEL action, NSString *equiv,
-                             NSEventModifierFlags mask, id target) {
+                             NSEventModifierFlags mask, id target, NSInteger tag) {
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:action keyEquivalent:equiv];
     item.keyEquivalentModifierMask = mask;
     item.target = target;
+    item.tag = tag;
     return item;
 }
 
@@ -235,9 +205,9 @@ void app_menu_install(const app_menu_hooks *hooks) {
     shared_menu_target = target;
 
     NSMenuItem *about = make_item([@"About " stringByAppendingString:@APP_NAME],
-        @selector(showAbout:), @"", 0, target);
+        @selector(showAbout:), @"", 0, target, 0);
     NSMenuItem *settings = make_item(@"Settings…",
-        @selector(showSettings:), @",", NSEventModifierFlagCommand, target);
+        @selector(showSettings:), @",", NSEventModifierFlagCommand, target, 0);
 
     [appMenu insertItem:about atIndex:0];
     [appMenu insertItem:[NSMenuItem separatorItem] atIndex:1];
@@ -246,33 +216,33 @@ void app_menu_install(const app_menu_hooks *hooks) {
 
     /* File menu */
     NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
-    target.saveItem = make_item(@"Save", @selector(triggerSave:), @"s",
-                                NSEventModifierFlagCommand, target);
+    target.saveItem = make_item(@"Save", @selector(triggerAction:), @"s",
+                                NSEventModifierFlagCommand, target, APP_ACTION_SAVE);
     [fileMenu addItem:target.saveItem];
 
     /* Edit menu */
     NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
-    [editMenu addItem:make_item(@"Cut", @selector(editCut:), @"x",
-                                NSEventModifierFlagCommand, target)];
-    [editMenu addItem:make_item(@"Copy", @selector(editCopy:), @"c",
-                                NSEventModifierFlagCommand, target)];
-    [editMenu addItem:make_item(@"Paste", @selector(editPaste:), @"v",
-                                NSEventModifierFlagCommand, target)];
-    [editMenu addItem:make_item(@"Select All", @selector(editSelectAll:), @"a",
-                                NSEventModifierFlagCommand, target)];
+    [editMenu addItem:make_item(@"Cut", @selector(triggerEditKey:), @"x",
+                                NSEventModifierFlagCommand, target, CUI_KEY_X)];
+    [editMenu addItem:make_item(@"Copy", @selector(triggerEditKey:), @"c",
+                                NSEventModifierFlagCommand, target, CUI_KEY_C)];
+    [editMenu addItem:make_item(@"Paste", @selector(triggerEditKey:), @"v",
+                                NSEventModifierFlagCommand, target, CUI_KEY_V)];
+    [editMenu addItem:make_item(@"Select All", @selector(triggerEditKey:), @"a",
+                                NSEventModifierFlagCommand, target, CUI_KEY_A)];
     [editMenu addItem:[NSMenuItem separatorItem]];
-    target.findItem = make_item(@"Find", @selector(triggerFind:), @"f",
-                                NSEventModifierFlagCommand, target);
+    target.findItem = make_item(@"Find", @selector(triggerAction:), @"f",
+                                NSEventModifierFlagCommand, target, APP_ACTION_FIND);
     [editMenu addItem:target.findItem];
 
     /* View menu */
     NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
     target.paletteItem = make_item(@"Command Palette…", @selector(triggerPalette:), @"k",
-                                   NSEventModifierFlagCommand, target);
+                                   NSEventModifierFlagCommand, target, 0);
     [viewMenu addItem:target.paletteItem];
     [viewMenu addItem:[NSMenuItem separatorItem]];
     target.fullscreenItem = make_item(@"Enter Full Screen", @selector(toggleFullscreen:), @"f",
-                                      NSEventModifierFlagCommand | NSEventModifierFlagControl, target);
+                                      NSEventModifierFlagCommand | NSEventModifierFlagControl, target, 0);
     [viewMenu addItem:target.fullscreenItem];
 
     NSInteger insertAt = bar.numberOfItems > 1 ? 1 : bar.numberOfItems;
@@ -304,16 +274,11 @@ void app_menu_install(const app_menu_hooks *hooks) {
 void app_menu_sync(const app_menu_state *state) {
     if (!shared_menu_target || !state) return;
     AppMenuTarget *target = shared_menu_target;
-    if (!target.hasSyncedState || !combo_equal(target.lastState.save_combo, state->save_combo)) {
-        macos_apply_key_combo(target.saveItem, state->save_combo);
-    }
-    if (!target.hasSyncedState || !combo_equal(target.lastState.find_combo, state->find_combo)) {
-        macos_apply_key_combo(target.findItem, state->find_combo);
-    }
-    if (!target.hasSyncedState || !combo_equal(target.lastState.palette_combo, state->palette_combo)) {
-        macos_apply_key_combo(target.paletteItem, state->palette_combo);
-    }
-    if (!target.hasSyncedState || target.lastState.fullscreen != state->fullscreen) {
+    bool force = !target.hasSyncedState;
+    sync_combo_item(target.saveItem, target.lastState.save_combo, state->save_combo, force);
+    sync_combo_item(target.findItem, target.lastState.find_combo, state->find_combo, force);
+    sync_combo_item(target.paletteItem, target.lastState.palette_combo, state->palette_combo, force);
+    if (force || target.lastState.fullscreen != state->fullscreen) {
         target.fullscreenItem.title = state->fullscreen ? @"Exit Full Screen" : @"Enter Full Screen";
     }
     target.lastState = *state;

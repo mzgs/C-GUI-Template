@@ -4,7 +4,6 @@
 #include <cui/cui_app.h>
 #include <cui/cui.h>
 #include <stdbool.h>
-#include <stdio.h>
 #include "settings.h"
 
 enum {
@@ -14,12 +13,6 @@ enum {
     SETTINGS_SECTION_ABOUT,
     SETTINGS_SECTION_COUNT
 };
-
-typedef enum {
-    APP_CLI_RUN = 0,
-    APP_CLI_EXIT_OK,
-    APP_CLI_EXIT_ERROR,
-} app_cli_action;
 
 typedef struct {
     const char *settings_path;
@@ -32,18 +25,14 @@ typedef struct {
     /* Settings & CLI options */
     app_settings settings;
     app_cli_opts cli;
-    const char *settings_path;
 
     /* Chrome UI state */
     bool settings_open;
     bool palette_open;
     int settings_section;
     char keybinding_filter[128];
-    const char *status;
-    cui_tone status_tone;
 
     /* Internal lifecycle & persistence tracking */
-    bool prev_settings_open;
     bool settings_save_failed;
     bool settings_dirty;
     bool window_dirty;
@@ -58,25 +47,17 @@ typedef struct {
     bool appearance_force_motion;
     bool env_theme_override;
     bool env_accent_override;
+#ifdef __APPLE__
     int pending_action;
     cui_key pending_edit_key;
     cui_key injected_edit_key;
+#endif
 
     /* Action callback */
     app_action_handler on_action;
     void *on_action_user;
-
-    /* Injectable platform hooks (default to CUI / OS implementations). */
-    bool (*file_dialog)(const cui_file_dialog_opts *opts, char *out, size_t cap);
-    bool (*open_url)(const char *url);
-    int (*system_dark)(void);
 } app_chrome;
 
-app_settings app_chrome_default_settings(void);
-app_cli_action app_chrome_parse_cli(int argc, char **argv, app_cli_opts *opts, FILE *out, FILE *err);
-
-/* Reset chrome to defaults without parsing CLI or reading disk. */
-void app_chrome_reset(app_chrome *chrome, const char *settings_path);
 /* Parse CLI, load settings, and initialize chrome. Returns false when the app should exit with *exit_code. */
 bool app_chrome_init(app_chrome *chrome, int argc, char **argv, int *exit_code);
 cui_app_desc app_chrome_app_desc(const app_chrome *chrome);
@@ -85,7 +66,6 @@ void app_chrome_set_action_handler(app_chrome *chrome, app_action_handler handle
 /* Call at the start and end of frame() around your application UI. */
 void app_chrome_begin_frame(app_chrome *chrome, cui_ctx *ui);
 void app_chrome_end_frame(app_chrome *chrome, cui_ctx *ui);
-void app_chrome_flush(app_chrome *chrome);
 void app_chrome_shutdown(app_chrome *chrome);
 
 void app_chrome_notify(app_chrome *chrome, cui_ctx *ui, const char *message, cui_tone tone);

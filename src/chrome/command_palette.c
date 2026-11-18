@@ -6,13 +6,13 @@ void chrome_draw_command_palette(app_chrome *chrome, cui_ctx *ui) {
     const char *save_shortcut = cui_shortcut_label(ui, chrome->settings.keybindings[APP_ACTION_SAVE].combo);
 
     cui_command commands[] = {
-        { "Open Settings", CUI_ICON_SETTINGS, "Navigation", settings_shortcut },
-        { "Appearance Settings", CUI_ICON_PALETTE, "Navigation", NULL },
-        { "Keybindings", CUI_ICON_KEYBOARD, "Navigation", NULL },
-        { "About " APP_NAME, CUI_ICON_INFO, "Navigation", NULL },
-        { "Theme: System", CUI_ICON_MONITOR, "Appearance", NULL },
-        { "Theme: Light", CUI_ICON_SUN, "Appearance", NULL },
-        { "Theme: Dark", CUI_ICON_MOON, "Appearance", NULL },
+        { "Open Settings", chrome_section_icons[SETTINGS_SECTION_GENERAL], "Navigation", settings_shortcut },
+        { "Appearance Settings", chrome_section_icons[SETTINGS_SECTION_APPEARANCE], "Navigation", NULL },
+        { "Keybindings", chrome_section_icons[SETTINGS_SECTION_KEYBINDINGS], "Navigation", NULL },
+        { "About " APP_NAME, chrome_section_icons[SETTINGS_SECTION_ABOUT], "Navigation", NULL },
+        { "Theme: System", chrome_theme_icons[APP_THEME_SYSTEM], "Appearance", NULL },
+        { "Theme: Light", chrome_theme_icons[APP_THEME_LIGHT], "Appearance", NULL },
+        { "Theme: Dark", chrome_theme_icons[APP_THEME_DARK], "Appearance", NULL },
         { "Toggle Fullscreen", CUI_ICON_MAXIMIZE_2, "Appearance", NULL },
         { "Find", CUI_ICON_SEARCH, "Actions", find_shortcut },
         { "Save", CUI_ICON_SAVE, "Actions", save_shortcut },
