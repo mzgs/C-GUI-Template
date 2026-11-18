@@ -43,7 +43,13 @@ static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) 
                     .kind = CUI_FILE_OPEN,
                     .title = "Import Settings",
                     .filter_name = "JSON",
+#ifdef __APPLE__
+                    /* CUI passes filter tokens to AppleScript `choose file of type`,
+                     * which treats 4-character strings like "json" as HFS type codes. */
+                    .filter = "public.json",
+#else
                     .filter = "json",
+#endif
                 }, path, sizeof path)) {
                 if (app_settings_load(&chrome->settings, path)) {
                     chrome_reload_appearance(chrome, ui);
