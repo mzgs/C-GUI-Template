@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+static app_state state;
 static const char *test_settings_path;
 static const char *mock_dialog_path;
 static cui_file_dialog_kind mock_dialog_last_kind;
@@ -47,7 +48,7 @@ static bool mock_open_url(const char *url) {
 
 static void draw_settings(cui_ctx *ui) {
     cui_begin_frame(ui, 1.0f / 60);
-    frame(ui, (void *)test_settings_path);
+    frame(ui, &state);
     cui_end_frame(ui);
 }
 
@@ -75,20 +76,9 @@ static void read_text_file(const char *path, char *buf, size_t cap) {
 }
 
 static void reset_ui_state(void) {
-    settings = default_settings;
-    settings_open = false;
-    prev_settings_open = false;
-    palette_open = false;
-    settings_save_failed = false;
-    settings_dirty = false;
-    window_dirty = false;
-    settings_status = NULL;
-    settings_section = SETTINGS_SECTION_GENERAL;
-    keybinding_filter[0] = '\0';
-    appearance_ui = NULL;
-    appearance_force_motion = false;
-    env_theme_override = false;
-    env_accent_override = false;
+    app_chrome_reset(&state.chrome, test_settings_path);
+    app_chrome_set_action_handler(&state.chrome, on_action, &state);
+    state.chrome.system_dark = mock_system_dark;
     mock_system_dark_value = -1;
 }
 
@@ -98,8 +88,8 @@ static void check_settings_layout(float width, float height, cui_theme_mode them
     assert(ui);
     cui_set_viewport(ui, width, height, 1);
     cui_set_reduced_motion(ui, true);
-    settings_open = true;
-    settings_section = SETTINGS_SECTION_GENERAL;
+    state.chrome.settings_open = true;
+    state.chrome.settings_section = SETTINGS_SECTION_GENERAL;
     draw_settings(ui);
     const cui_draw_data *draw = cui_get_draw_data(ui);
     bool found_panel = false;
@@ -128,21 +118,21 @@ static void check_settings_layout(float width, float height, cui_theme_mode them
     press_key(ui, CUI_KEY_TAB, 0);
     press_key(ui, CUI_KEY_TAB, 0);
     press_key(ui, CUI_KEY_ENTER, 0);
-    assert(settings_section == SETTINGS_SECTION_APPEARANCE);
+    assert(state.chrome.settings_section == SETTINGS_SECTION_APPEARANCE);
 
     press_key(ui, CUI_KEY_TAB, 0);
     press_key(ui, CUI_KEY_ENTER, 0);
-    assert(settings_section == SETTINGS_SECTION_KEYBINDINGS);
+    assert(state.chrome.settings_section == SETTINGS_SECTION_KEYBINDINGS);
 
     press_key(ui, CUI_KEY_TAB, 0);
     press_key(ui, CUI_KEY_ENTER, 0);
-    assert(settings_section == SETTINGS_SECTION_ABOUT);
+    assert(state.chrome.settings_section == SETTINGS_SECTION_ABOUT);
 
     press_key(ui, CUI_KEY_TAB, CUI_MOD_SHIFT);
     press_key(ui, CUI_KEY_TAB, CUI_MOD_SHIFT);
     press_key(ui, CUI_KEY_TAB, CUI_MOD_SHIFT);
     press_key(ui, CUI_KEY_ENTER, 0);
-    assert(settings_section == SETTINGS_SECTION_GENERAL);
+    assert(state.chrome.settings_section == SETTINGS_SECTION_GENERAL);
     cui_destroy(ui);
     reset_ui_state();
 }
@@ -154,9 +144,9 @@ static void check_general_autosave(cui_theme_mode theme) {
     assert(ui);
     cui_set_viewport(ui, 900, 600, 1);
     cui_set_reduced_motion(ui, true);
-    settings_open = true;
-    settings_section = SETTINGS_SECTION_GENERAL;
-    app_settings original = settings;
+    state.chrome.settings_open = true;
+    state.chrome.settings_section = SETTINGS_SECTION_GENERAL;
+    app_settings original = state.chrome.settings;
     draw_settings(ui);
     /* Close, four sidebar items, then the text field and the number field. */
     for (int i = 0; i < 6; ++i) press_key(ui, CUI_KEY_TAB, 0);
@@ -165,13 +155,13 @@ static void check_general_autosave(cui_theme_mode theme) {
     cui_input_text(ui, edited);
     draw_settings(ui);
     /* Typing marks dirty without rewriting disk on every keystroke. */
-    assert(settings_dirty);
+    assert(state.chrome.settings_dirty);
     FILE *probe = fopen(test_settings_path, "rb");
     assert(!probe);
 
     /* Tabbing to the number field blurs Example string and flushes it to disk. */
     press_key(ui, CUI_KEY_TAB, 0);
-    assert(!settings_dirty);
+    assert(!state.chrome.settings_dirty);
     app_settings reloaded = original;
     app_settings_load(&reloaded, test_settings_path);
     assert(strcmp(reloaded.example_string, edited) == 0);
@@ -188,10 +178,10 @@ static void check_general_autosave(cui_theme_mode theme) {
     press_key(ui, CUI_KEY_A, CUI_MOD_PRIMARY);
     cui_input_text(ui, "Flushed on close");
     draw_settings(ui);
-    assert(settings_dirty);
-    settings_open = false;
+    assert(state.chrome.settings_dirty);
+    state.chrome.settings_open = false;
     draw_settings(ui);
-    assert(!settings_dirty);
+    assert(!state.chrome.settings_dirty);
     reloaded = original;
     app_settings_load(&reloaded, test_settings_path);
     assert(strcmp(reloaded.example_string, "Flushed on close") == 0);
@@ -204,6 +194,7 @@ static void check_general_autosave(cui_theme_mode theme) {
 static void check_appearance_settings(void) {
     reset_ui_state();
     remove(test_settings_path);
+    app_settings defaults = app_chrome_default_settings();
     cui_ctx *ui = cui_create(&(cui_ctx_desc){ .theme = CUI_THEME_LIGHT });
     assert(ui);
     cui_set_viewport(ui, 900, 600, 1);
@@ -217,11 +208,11 @@ static void check_appearance_settings(void) {
     assert(cui_get_theme_mode(ui) == CUI_THEME_LIGHT);
 
     /* Explicit appearance values apply and persist cleanly. */
-    settings.theme_mode = APP_THEME_DARK;
-    settings.accent = CUI_ACCENT_BLUE;
-    settings.font_scale = 1.15f;
-    settings.reduced_motion = true;
-    appearance_force_motion = true;
+    state.chrome.settings.theme_mode = APP_THEME_DARK;
+    state.chrome.settings.accent = CUI_ACCENT_BLUE;
+    state.chrome.settings.font_scale = 1.15f;
+    state.chrome.settings.reduced_motion = true;
+    state.chrome.appearance_force_motion = true;
     draw_settings(ui);
     assert(cui_get_theme_mode(ui) == CUI_THEME_DARK);
     assert(cui_get_accent(ui) == CUI_ACCENT_BLUE);
@@ -229,27 +220,27 @@ static void check_appearance_settings(void) {
     assert(cui_theme_get(ui)->motion == 0.0f);
 
     /* Render Appearance section at normal and compact sizes. */
-    settings_open = true;
-    settings_section = SETTINGS_SECTION_APPEARANCE;
+    state.chrome.settings_open = true;
+    state.chrome.settings_section = SETTINGS_SECTION_APPEARANCE;
     draw_settings(ui);
     cui_set_viewport(ui, 360, 280, 1);
     draw_settings(ui);
     cui_set_viewport(ui, 900, 600, 1);
 
     /* Turning reduced motion back off restores animations. */
-    settings.reduced_motion = false;
-    appearance_force_motion = true;
+    state.chrome.settings.reduced_motion = false;
+    state.chrome.appearance_force_motion = true;
     draw_settings(ui);
     assert(cui_theme_get(ui)->motion > 0.0f);
 
     /* Save and reload appearance + window state (including negative multi-monitor pos). */
-    settings.window_has_pos = true;
-    settings.window_x = -240;
-    settings.window_y = 180;
-    settings.window_width = 1120;
-    settings.window_height = 740;
-    settings.window_fullscreen = true;
-    assert(app_settings_save(&settings, test_settings_path));
+    state.chrome.settings.window_has_pos = true;
+    state.chrome.settings.window_x = -240;
+    state.chrome.settings.window_y = 180;
+    state.chrome.settings.window_width = 1120;
+    state.chrome.settings.window_height = 740;
+    state.chrome.settings.window_fullscreen = true;
+    assert(app_settings_save(&state.chrome.settings, test_settings_path));
     char json[2048];
     read_text_file(test_settings_path, json, sizeof json);
     assert(strstr(json, "\"appearance\": {") != NULL);
@@ -261,7 +252,7 @@ static void check_appearance_settings(void) {
     assert(strstr(json, "\"width\": 1120") != NULL);
     assert(strstr(json, "\"fullscreen\": true") != NULL);
 
-    app_settings reloaded = default_settings;
+    app_settings reloaded = defaults;
     assert(app_settings_load(&reloaded, test_settings_path));
     assert(reloaded.theme_mode == APP_THEME_DARK);
     assert(reloaded.accent == CUI_ACCENT_BLUE);
@@ -275,12 +266,12 @@ static void check_appearance_settings(void) {
     assert(reloaded.window_fullscreen);
 
     /* When window_has_pos is false, x/y are omitted from JSON. */
-    settings.window_has_pos = false;
-    assert(app_settings_save(&settings, test_settings_path));
+    state.chrome.settings.window_has_pos = false;
+    assert(app_settings_save(&state.chrome.settings, test_settings_path));
     read_text_file(test_settings_path, json, sizeof json);
     assert(strstr(json, "\"x\":") == NULL);
     assert(strstr(json, "\"y\":") == NULL);
-    reloaded = default_settings;
+    reloaded = defaults;
     assert(app_settings_load(&reloaded, test_settings_path));
     assert(!reloaded.window_has_pos);
 
@@ -296,16 +287,16 @@ static void check_keybinding_edit_and_conflicts(cui_theme_mode theme) {
     assert(ui);
     cui_set_viewport(ui, 900, 600, 1);
     cui_set_reduced_motion(ui, true);
-    settings_open = true;
-    settings_section = SETTINGS_SECTION_KEYBINDINGS;
-    strcpy(keybinding_filter, "sAv");
-    app_settings original = settings;
+    state.chrome.settings_open = true;
+    state.chrome.settings_section = SETTINGS_SECTION_KEYBINDINGS;
+    strcpy(state.chrome.keybinding_filter, "sAv");
+    app_settings original = state.chrome.settings;
     draw_settings(ui);
     /* Close, four sidebar items, filter and its clear button, then the recorder. */
     for (int i = 0; i < 8; ++i) press_key(ui, CUI_KEY_TAB, 0);
     press_key(ui, CUI_KEY_ENTER, 0);
     press_key(ui, CUI_KEY_J, CUI_MOD_PRIMARY | CUI_MOD_SHIFT);
-    assert(settings.keybindings[APP_ACTION_SAVE].combo.key == CUI_KEY_J);
+    assert(state.chrome.settings.keybindings[APP_ACTION_SAVE].combo.key == CUI_KEY_J);
 
     /* Keybindings are stored under a "keybindings" object using stable key/modifier names. */
     char json[2048];
@@ -323,39 +314,39 @@ static void check_keybinding_edit_and_conflicts(cui_theme_mode theme) {
 
     press_key(ui, CUI_KEY_ENTER, 0);
     press_key(ui, CUI_KEY_ESCAPE, 0);
-    assert(settings_open);
-    assert(settings.keybindings[APP_ACTION_SAVE].combo.key == CUI_KEY_J);
+    assert(state.chrome.settings_open);
+    assert(state.chrome.settings.keybindings[APP_ACTION_SAVE].combo.key == CUI_KEY_J);
 
     press_key(ui, CUI_KEY_ENTER, 0);
     press_key(ui, CUI_KEY_BACKSPACE, 0);
-    assert(settings.keybindings[APP_ACTION_SAVE].combo.key == CUI_KEY_NONE);
+    assert(state.chrome.settings.keybindings[APP_ACTION_SAVE].combo.key == CUI_KEY_NONE);
     reloaded = original;
     app_settings_load(&reloaded, test_settings_path);
     assert(reloaded.keybindings[APP_ACTION_SAVE].combo.key == CUI_KEY_NONE);
     assert(reloaded.keybindings[APP_ACTION_SAVE].combo.mods == 0);
 
     /* Conflict detection: default has no conflicts, duplicate & reserved do. */
-    settings = original;
-    assert(app_keybinding_conflict(&settings, APP_ACTION_FIND) == APP_CONFLICT_NONE);
-    assert(app_keybinding_conflict(&settings, APP_ACTION_SAVE) == APP_CONFLICT_NONE);
-    assert(app_keybinding_conflict(&settings, APP_ACTION_COMMAND_PALETTE) == APP_CONFLICT_NONE);
+    state.chrome.settings = original;
+    assert(app_keybinding_conflict(&state.chrome.settings, APP_ACTION_FIND) == APP_CONFLICT_NONE);
+    assert(app_keybinding_conflict(&state.chrome.settings, APP_ACTION_SAVE) == APP_CONFLICT_NONE);
+    assert(app_keybinding_conflict(&state.chrome.settings, APP_ACTION_COMMAND_PALETTE) == APP_CONFLICT_NONE);
 
-    settings.keybindings[APP_ACTION_SAVE].combo = settings.keybindings[APP_ACTION_FIND].combo;
-    assert(app_keybinding_conflict(&settings, APP_ACTION_FIND) == APP_ACTION_SAVE);
-    assert(app_keybinding_conflict(&settings, APP_ACTION_SAVE) == APP_ACTION_FIND);
+    state.chrome.settings.keybindings[APP_ACTION_SAVE].combo = state.chrome.settings.keybindings[APP_ACTION_FIND].combo;
+    assert(app_keybinding_conflict(&state.chrome.settings, APP_ACTION_FIND) == APP_ACTION_SAVE);
+    assert(app_keybinding_conflict(&state.chrome.settings, APP_ACTION_SAVE) == APP_ACTION_FIND);
 
-    settings.keybindings[APP_ACTION_COMMAND_PALETTE].combo = (cui_key_combo){ CUI_MOD_PRIMARY, CUI_KEY_COMMA };
-    assert(app_keybinding_conflict(&settings, APP_ACTION_COMMAND_PALETTE) == APP_CONFLICT_SETTINGS);
+    state.chrome.settings.keybindings[APP_ACTION_COMMAND_PALETTE].combo = (cui_key_combo){ CUI_MOD_PRIMARY, CUI_KEY_COMMA };
+    assert(app_keybinding_conflict(&state.chrome.settings, APP_ACTION_COMMAND_PALETTE) == APP_CONFLICT_SETTINGS);
 
     /* Rendering Keybindings with conflicts exercises alert + badges cleanly. */
-    keybinding_filter[0] = '\0';
+    state.chrome.keybinding_filter[0] = '\0';
     draw_settings(ui);
 
     /* Cleared shortcut never conflicts. */
-    settings.keybindings[APP_ACTION_FIND].combo = (cui_key_combo){ 0, CUI_KEY_NONE };
-    settings.keybindings[APP_ACTION_SAVE].combo = (cui_key_combo){ 0, CUI_KEY_NONE };
-    assert(app_keybinding_conflict(&settings, APP_ACTION_FIND) == APP_CONFLICT_NONE);
-    assert(app_keybinding_conflict(&settings, APP_ACTION_SAVE) == APP_CONFLICT_NONE);
+    state.chrome.settings.keybindings[APP_ACTION_FIND].combo = (cui_key_combo){ 0, CUI_KEY_NONE };
+    state.chrome.settings.keybindings[APP_ACTION_SAVE].combo = (cui_key_combo){ 0, CUI_KEY_NONE };
+    assert(app_keybinding_conflict(&state.chrome.settings, APP_ACTION_FIND) == APP_CONFLICT_NONE);
+    assert(app_keybinding_conflict(&state.chrome.settings, APP_ACTION_SAVE) == APP_CONFLICT_NONE);
 
     cui_destroy(ui);
     reset_ui_state();
@@ -372,34 +363,35 @@ static void check_actions_and_command_palette(void) {
 
     /* Find & Save shortcuts dispatch actions and emit toasts. */
     press_key(ui, CUI_KEY_F, CUI_MOD_PRIMARY);
-    assert(settings_status && strcmp(settings_status, "Find triggered.") == 0);
-    assert(settings_status_tone == CUI_TONE_INFO);
+    assert(state.chrome.status && strcmp(state.chrome.status, "Find triggered.") == 0);
+    assert(state.chrome.status_tone == CUI_TONE_INFO);
 
     press_key(ui, CUI_KEY_S, CUI_MOD_PRIMARY);
-    assert(settings_status && strcmp(settings_status, "Save triggered.") == 0);
-    assert(settings_status_tone == CUI_TONE_SUCCESS);
+    assert(state.chrome.status && strcmp(state.chrome.status, "Save triggered.") == 0);
+    assert(state.chrome.status_tone == CUI_TONE_SUCCESS);
 
     /* Command Palette opens with its configured shortcut (default Cmd/Ctrl+K). */
-    assert(!palette_open);
+    assert(!state.chrome.palette_open);
     press_key(ui, CUI_KEY_K, CUI_MOD_PRIMARY);
-    assert(palette_open);
+    assert(state.chrome.palette_open);
 
     /* Filter and pick "Theme: Dark" inside the command palette. */
     cui_input_text(ui, "Theme: Dark");
     draw_settings(ui);
     press_key(ui, CUI_KEY_ENTER, 0);
-    assert(!palette_open);
-    assert(settings.theme_mode == APP_THEME_DARK);
+    assert(!state.chrome.palette_open);
+    assert(state.chrome.settings.theme_mode == APP_THEME_DARK);
     assert(cui_get_theme_mode(ui) == CUI_THEME_DARK);
 
     /* Rebinding Command Palette shortcut updates live trigger. */
-    settings.keybindings[APP_ACTION_COMMAND_PALETTE].combo = (cui_key_combo){ CUI_MOD_PRIMARY | CUI_MOD_SHIFT, CUI_KEY_P };
+    state.chrome.settings.keybindings[APP_ACTION_COMMAND_PALETTE].combo =
+        (cui_key_combo){ CUI_MOD_PRIMARY | CUI_MOD_SHIFT, CUI_KEY_P };
     press_key(ui, CUI_KEY_K, CUI_MOD_PRIMARY);
-    assert(!palette_open);
+    assert(!state.chrome.palette_open);
     press_key(ui, CUI_KEY_P, CUI_MOD_PRIMARY | CUI_MOD_SHIFT);
-    assert(palette_open);
+    assert(state.chrome.palette_open);
     press_key(ui, CUI_KEY_ESCAPE, 0);
-    assert(!palette_open);
+    assert(!state.chrome.palette_open);
 
     cui_destroy(ui);
     reset_ui_state();
@@ -408,7 +400,7 @@ static void check_actions_and_command_palette(void) {
 
 static void check_load_validation_and_compat(const char *path) {
     reset_ui_state();
-    app_settings original = settings;
+    app_settings original = state.chrome.settings;
     write_text_file(path,
         "{\"example_number\":true,\"example_string\":\"Loaded\","
         "\"appearance\":{\"theme\":\"nope\",\"accent\":\"ultraviolet\",\"font_scale\":9.0,\"reduced_motion\":123},"
@@ -454,6 +446,12 @@ static void check_load_validation_and_compat(const char *path) {
     assert(loaded.keybindings[APP_ACTION_SAVE].combo.key == CUI_KEY_J);
     assert(loaded.keybindings[APP_ACTION_SAVE].combo.mods == (CUI_MOD_CTRL | CUI_MOD_ALT));
 
+    /* Extra/unknown fields (including any version tag) are ignored when importing settings. */
+    write_text_file(path, "{\"version\":\"9.9.9\",\"example_number\":50,\"future_field\":true}");
+    loaded = original;
+    assert(app_settings_load(&loaded, path));
+    assert(loaded.example_number == 50);
+
     /* Malformed, empty, non-object, or unrelated JSON files fail without mutating settings. */
     const char *invalid_cases[] = { "{not json", "[1,2,3]", "{}", "{\"unrelated\":123}" };
     for (size_t i = 0; i < sizeof invalid_cases / sizeof invalid_cases[0]; ++i) {
@@ -469,6 +467,7 @@ static void check_load_validation_and_compat(const char *path) {
 
 static void check_import_export_open_and_reset(const char *base_dir, cui_theme_mode theme) {
     reset_ui_state();
+    app_settings defaults = app_chrome_default_settings();
     char export_path[4096];
     char bad_path[4096];
     int len = snprintf(export_path, sizeof export_path, "%s/exported.json", base_dir);
@@ -483,18 +482,19 @@ static void check_import_export_open_and_reset(const char *base_dir, cui_theme_m
     assert(ui);
     cui_set_viewport(ui, 900, 600, 1);
     cui_set_reduced_motion(ui, true);
-    app_settings original = settings;
-    settings_open = true;
-    settings_section = SETTINGS_SECTION_GENERAL;
-    settings_file_dialog = mock_file_dialog;
-    settings_open_url = mock_open_url;
+    app_settings original = state.chrome.settings;
+    state.chrome.settings_open = true;
+    state.chrome.settings_section = SETTINGS_SECTION_GENERAL;
+    state.chrome.file_dialog = mock_file_dialog;
+    state.chrome.open_url = mock_open_url;
 
-    strcpy(settings.example_string, "Exported Value");
-    settings.example_number = 84;
-    settings.theme_mode = APP_THEME_DARK;
-    settings.accent = CUI_ACCENT_GREEN;
-    settings.font_scale = 1.20f;
-    settings.keybindings[APP_ACTION_FIND].combo = (cui_key_combo){ CUI_MOD_CTRL | CUI_MOD_SHIFT, CUI_KEY_G };
+    strcpy(state.chrome.settings.example_string, "Exported Value");
+    state.chrome.settings.example_number = 84;
+    state.chrome.settings.theme_mode = APP_THEME_DARK;
+    state.chrome.settings.accent = CUI_ACCENT_GREEN;
+    state.chrome.settings.font_scale = 1.20f;
+    state.chrome.settings.keybindings[APP_ACTION_FIND].combo =
+        (cui_key_combo){ CUI_MOD_CTRL | CUI_MOD_SHIFT, CUI_KEY_G };
 
     draw_settings(ui);
     /* Close, 4 sidebar items, Example string, Example number (+2 steppers), Import..., Export... */
@@ -508,17 +508,17 @@ static void check_import_export_open_and_reset(const char *base_dir, cui_theme_m
     assert(mock_dialog_last_kind == CUI_FILE_SAVE);
     assert(strcmp(mock_dialog_last_filter, "json") == 0);
     assert(strcmp(mock_dialog_last_default_name, "settings.json") == 0);
-    assert(settings_status && strcmp(settings_status, "Settings exported.") == 0);
+    assert(state.chrome.status && strcmp(state.chrome.status, "Settings exported.") == 0);
 
     /* Change in-memory settings, then cancel Import: nothing changes. */
-    settings = original;
+    state.chrome.settings = original;
     press_key(ui, CUI_KEY_TAB, CUI_MOD_SHIFT);
     mock_dialog_path = NULL;
     press_key(ui, CUI_KEY_ENTER, 0);
     assert(mock_dialog_calls == 2);
     assert(mock_dialog_last_kind == CUI_FILE_OPEN);
-    assert(strcmp(settings.example_string, original.example_string) == 0);
-    assert(settings.example_number == original.example_number);
+    assert(strcmp(state.chrome.settings.example_string, original.example_string) == 0);
+    assert(state.chrome.settings.example_number == original.example_number);
 
     /* Import from exported file: updates state, appearance, and persists. */
     mock_dialog_path = export_path;
@@ -526,14 +526,14 @@ static void check_import_export_open_and_reset(const char *base_dir, cui_theme_m
     assert(mock_dialog_calls == 3);
     assert(mock_dialog_last_kind == CUI_FILE_OPEN);
     assert(strcmp(mock_dialog_last_filter, "json") == 0);
-    assert(strcmp(settings.example_string, "Exported Value") == 0);
-    assert(settings.example_number == 84);
-    assert(settings.theme_mode == APP_THEME_DARK);
-    assert(settings.accent == CUI_ACCENT_GREEN);
+    assert(strcmp(state.chrome.settings.example_string, "Exported Value") == 0);
+    assert(state.chrome.settings.example_number == 84);
+    assert(state.chrome.settings.theme_mode == APP_THEME_DARK);
+    assert(state.chrome.settings.accent == CUI_ACCENT_GREEN);
     assert(cui_get_accent(ui) == CUI_ACCENT_GREEN);
-    assert(settings.keybindings[APP_ACTION_FIND].combo.key == CUI_KEY_G);
-    assert(settings.keybindings[APP_ACTION_FIND].combo.mods == (CUI_MOD_CTRL | CUI_MOD_SHIFT));
-    assert(settings_status && strcmp(settings_status, "Settings imported.") == 0);
+    assert(state.chrome.settings.keybindings[APP_ACTION_FIND].combo.key == CUI_KEY_G);
+    assert(state.chrome.settings.keybindings[APP_ACTION_FIND].combo.mods == (CUI_MOD_CTRL | CUI_MOD_SHIFT));
+    assert(state.chrome.status && strcmp(state.chrome.status, "Settings imported.") == 0);
 
     app_settings persisted = original;
     assert(app_settings_load(&persisted, test_settings_path));
@@ -546,10 +546,10 @@ static void check_import_export_open_and_reset(const char *base_dir, cui_theme_m
     write_text_file(bad_path, "{broken");
     mock_dialog_path = bad_path;
     press_key(ui, CUI_KEY_ENTER, 0);
-    assert(strcmp(settings.example_string, "Exported Value") == 0);
-    assert(settings.example_number == 84);
-    assert(settings_status && strstr(settings_status, "import") != NULL);
-    assert(settings_status_tone == CUI_TONE_DANGER);
+    assert(strcmp(state.chrome.settings.example_string, "Exported Value") == 0);
+    assert(state.chrome.settings.example_number == 84);
+    assert(state.chrome.status && strstr(state.chrome.status, "import") != NULL);
+    assert(state.chrome.status_tone == CUI_TONE_DANGER);
 
     /* Open Folder button resolves and opens the settings directory. */
     press_key(ui, CUI_KEY_TAB, 0); /* Export... */
@@ -559,43 +559,41 @@ static void check_import_export_open_and_reset(const char *base_dir, cui_theme_m
     press_key(ui, CUI_KEY_ENTER, 0);
     assert(mock_open_url_calls == 1);
     assert(strcmp(mock_opened_url, base_dir) == 0);
-    assert(settings_status && strcmp(settings_status, "Opened settings folder.") == 0);
+    assert(state.chrome.status && strcmp(state.chrome.status, "Opened settings folder.") == 0);
 
     /* Reset to defaults: requires two-step confirm and disarms after timeout. */
     press_key(ui, CUI_KEY_TAB, 0); /* Reset */
     press_key(ui, CUI_KEY_ENTER, 0); /* Arms confirmation */
-    assert(strcmp(settings.example_string, "Exported Value") == 0);
+    assert(strcmp(state.chrome.settings.example_string, "Exported Value") == 0);
     /* Advance past 3s timeout so it disarms; next Enter re-arms without resetting. */
     cui_begin_frame(ui, 4.0f);
-    frame(ui, (void *)test_settings_path);
+    frame(ui, &state);
     cui_end_frame(ui);
     press_key(ui, CUI_KEY_ENTER, 0); /* Re-arm */
-    assert(strcmp(settings.example_string, "Exported Value") == 0);
+    assert(strcmp(state.chrome.settings.example_string, "Exported Value") == 0);
     press_key(ui, CUI_KEY_ENTER, 0); /* Confirm */
-    assert(strcmp(settings.example_string, default_settings.example_string) == 0);
-    assert(settings.example_number == default_settings.example_number);
-    assert(settings.theme_mode == default_settings.theme_mode);
-    assert(settings.accent == default_settings.accent);
-    assert(cui_get_accent(ui) == default_settings.accent);
-    assert(settings.keybindings[APP_ACTION_FIND].combo.key == default_settings.keybindings[APP_ACTION_FIND].combo.key);
-    assert(settings.keybindings[APP_ACTION_FIND].combo.mods == default_settings.keybindings[APP_ACTION_FIND].combo.mods);
-    assert(settings_status && strcmp(settings_status, "Settings reset to defaults.") == 0);
+    assert(strcmp(state.chrome.settings.example_string, defaults.example_string) == 0);
+    assert(state.chrome.settings.example_number == defaults.example_number);
+    assert(state.chrome.settings.theme_mode == defaults.theme_mode);
+    assert(state.chrome.settings.accent == defaults.accent);
+    assert(cui_get_accent(ui) == defaults.accent);
+    assert(state.chrome.settings.keybindings[APP_ACTION_FIND].combo.key == defaults.keybindings[APP_ACTION_FIND].combo.key);
+    assert(state.chrome.settings.keybindings[APP_ACTION_FIND].combo.mods == defaults.keybindings[APP_ACTION_FIND].combo.mods);
+    assert(state.chrome.status && strcmp(state.chrome.status, "Settings reset to defaults.") == 0);
 
     persisted = original;
     strcpy(persisted.example_string, "Stale");
     assert(app_settings_load(&persisted, test_settings_path));
-    assert(strcmp(persisted.example_string, default_settings.example_string) == 0);
-    assert(persisted.example_number == default_settings.example_number);
-    assert(persisted.accent == default_settings.accent);
-    assert(persisted.keybindings[APP_ACTION_FIND].combo.key == default_settings.keybindings[APP_ACTION_FIND].combo.key);
+    assert(strcmp(persisted.example_string, defaults.example_string) == 0);
+    assert(persisted.example_number == defaults.example_number);
+    assert(persisted.accent == defaults.accent);
+    assert(persisted.keybindings[APP_ACTION_FIND].combo.key == defaults.keybindings[APP_ACTION_FIND].combo.key);
 
     /* Closing settings clears status. */
-    settings_open = false;
+    state.chrome.settings_open = false;
     draw_settings(ui);
-    assert(settings_status == NULL);
+    assert(state.chrome.status == NULL);
 
-    settings_file_dialog = default_file_dialog;
-    settings_open_url = cui_app_open_url;
     cui_destroy(ui);
     reset_ui_state();
     remove(test_settings_path);
@@ -605,7 +603,7 @@ static void check_import_export_open_and_reset(const char *base_dir, cui_theme_m
 
 static void check_override_paths_and_dir(const char *base_dir) {
     reset_ui_state();
-    app_settings original = settings;
+    app_settings original = state.chrome.settings;
     char nested[4096];
     int len = snprintf(nested, sizeof nested, "%s/nested/sub/settings.json", base_dir);
     assert(len >= 0 && (size_t)len < sizeof nested);
@@ -645,33 +643,33 @@ static void check_cli_parsing(void) {
     app_cli_opts opts;
 
     char *argv_default[] = { "app" };
-    assert(app_parse_cli(1, argv_default, &opts, sink_out, sink_err) == APP_CLI_RUN);
+    assert(app_chrome_parse_cli(1, argv_default, &opts, sink_out, sink_err) == APP_CLI_RUN);
     assert(opts.settings_path == NULL);
     assert(!opts.software_renderer);
 
     char *argv_flags[] = { "app", "--software", "--settings", "/tmp/custom.json", "-psn_0_12345" };
-    assert(app_parse_cli(5, argv_flags, &opts, sink_out, sink_err) == APP_CLI_RUN);
+    assert(app_chrome_parse_cli(5, argv_flags, &opts, sink_out, sink_err) == APP_CLI_RUN);
     assert(opts.software_renderer);
     assert(opts.settings_path && strcmp(opts.settings_path, "/tmp/custom.json") == 0);
 
     char *argv_eq[] = { "app", "--settings=/tmp/eq.json" };
-    assert(app_parse_cli(2, argv_eq, &opts, sink_out, sink_err) == APP_CLI_RUN);
+    assert(app_chrome_parse_cli(2, argv_eq, &opts, sink_out, sink_err) == APP_CLI_RUN);
     assert(opts.settings_path && strcmp(opts.settings_path, "/tmp/eq.json") == 0);
 
     char *argv_help[] = { "app", "--help" };
-    assert(app_parse_cli(2, argv_help, &opts, sink_out, sink_err) == APP_CLI_EXIT_OK);
+    assert(app_chrome_parse_cli(2, argv_help, &opts, sink_out, sink_err) == APP_CLI_EXIT_OK);
 
     char *argv_version[] = { "app", "--version" };
-    assert(app_parse_cli(2, argv_version, &opts, sink_out, sink_err) == APP_CLI_EXIT_OK);
+    assert(app_chrome_parse_cli(2, argv_version, &opts, sink_out, sink_err) == APP_CLI_EXIT_OK);
 
     char *argv_missing[] = { "app", "--settings" };
-    assert(app_parse_cli(2, argv_missing, &opts, sink_out, sink_err) == APP_CLI_EXIT_ERROR);
+    assert(app_chrome_parse_cli(2, argv_missing, &opts, sink_out, sink_err) == APP_CLI_EXIT_ERROR);
 
     char *argv_empty[] = { "app", "--settings=" };
-    assert(app_parse_cli(2, argv_empty, &opts, sink_out, sink_err) == APP_CLI_EXIT_ERROR);
+    assert(app_chrome_parse_cli(2, argv_empty, &opts, sink_out, sink_err) == APP_CLI_EXIT_ERROR);
 
     char *argv_unknown[] = { "app", "--bogus" };
-    assert(app_parse_cli(2, argv_unknown, &opts, sink_out, sink_err) == APP_CLI_EXIT_ERROR);
+    assert(app_chrome_parse_cli(2, argv_unknown, &opts, sink_out, sink_err) == APP_CLI_EXIT_ERROR);
 
     fclose(sink_out);
     fclose(sink_err);
@@ -679,15 +677,14 @@ static void check_cli_parsing(void) {
 
 int main(int argc, char **argv) {
     assert(argc == 2);
-    settings_system_dark = mock_system_dark;
 
-    assert(contains_ignore_case("Find", ""));
-    assert(contains_ignore_case("", ""));
-    assert(contains_ignore_case("Save", "sAv"));
-    assert(contains_ignore_case("Cmd Shift K", "shift k"));
-    assert(!contains_ignore_case("Find", "Finding"));
-    assert(!contains_ignore_case("", "Find"));
-    assert(!contains_ignore_case("Find", "xyz"));
+    assert(app_contains_ignore_case("Find", ""));
+    assert(app_contains_ignore_case("", ""));
+    assert(app_contains_ignore_case("Save", "sAv"));
+    assert(app_contains_ignore_case("Cmd Shift K", "shift k"));
+    assert(!app_contains_ignore_case("Find", "Finding"));
+    assert(!app_contains_ignore_case("", "Find"));
+    assert(!app_contains_ignore_case("Find", "xyz"));
 
     char path[4096];
     int len = snprintf(path, sizeof path, "%s/settings.json", argv[1]);
@@ -695,8 +692,9 @@ int main(int argc, char **argv) {
     test_settings_path = path;
     remove(path);
 
-    assert(!app_settings_load(&settings, test_settings_path));
-    assert(settings.example_number == 42);
+    reset_ui_state();
+    assert(!app_settings_load(&state.chrome.settings, test_settings_path));
+    assert(state.chrome.settings.example_number == 42);
 
     check_settings_layout(900, 600, CUI_THEME_LIGHT);
     check_settings_layout(360, 280, CUI_THEME_LIGHT);
@@ -723,10 +721,10 @@ int main(int argc, char **argv) {
         assert(ui);
         cui_set_viewport(ui, 900, 600, 1);
         cui_set_reduced_motion(ui, true);
-        settings_open = false;
+        state.chrome.settings_open = false;
         press_key(ui, CUI_KEY_NONE, 0);
         press_key(ui, CUI_KEY_COMMA, CUI_MOD_PRIMARY);
-        assert(settings_open);
+        assert(state.chrome.settings_open);
         cui_destroy(ui);
         reset_ui_state();
     }
@@ -740,10 +738,10 @@ int main(int argc, char **argv) {
         len = snprintf(xdg_path, sizeof xdg_path, "%s/%s/settings.json", argv[1], APP_NAME);
         assert(len >= 0 && (size_t)len < sizeof xdg_path);
         remove(xdg_path);
-        app_settings saved = default_settings;
+        app_settings saved = app_chrome_default_settings();
         saved.example_number = 55;
         assert(app_settings_save(&saved, NULL));
-        app_settings loaded = default_settings;
+        app_settings loaded = app_chrome_default_settings();
         app_settings_load(&loaded, NULL);
         assert(loaded.example_number == 55);
         assert(remove(xdg_path) == 0);

@@ -1,7 +1,7 @@
 # C-GUI-Template
 
 A cross-platform, resizable C99 desktop app template using [Better-C-UI](https://github.com/mzgs/Better-C-UI).
-Add your UI calls inside `frame()` in `main.c`.
+Add your state, action handlers, and UI calls inside `main.c` (`app_state`, `on_action()`, and `frame()`). Template chrome (Settings dialog, Command Palette, menu bar, window persistence, and CLI parsing) lives separately in `app_chrome.c`.
 
 ## Quick start (macOS)
 
@@ -15,12 +15,13 @@ app without recompiling. A failed build stops the script before launch.
 
 ## Built-in features
 
-- **Settings dialog**: On macOS, choose **C GUI Template → Settings…** (`⌘,`) or **About C GUI Template**. On Windows and Linux, use the top menu bar (**File → Settings…**, **Help → About**) or press **Ctrl+,**.
+- **Clean app entry point**: `main.c` stays minimal—wrap your UI between `app_chrome_begin_frame()` and `app_chrome_end_frame()` and handle actions in `on_action()`.
+- **Native & cross-platform menu bar**: On macOS, native **App** (**About**, **Settings…** `⌘,`), **File** (**Save**), **Edit** (**Cut**, **Copy**, **Paste**, **Select All**, **Find**), **View** (**Command Palette…**, **Enter/Exit Full Screen** `⌃⌘F`), and **Window** menus stay dynamically synced with your keybindings. On Windows and Linux, the top menu bar provides **File**, **Edit**, **View**, and **Help** (plus **Ctrl+,** for Settings and **F11** for Fullscreen).
 - **Appearance preferences**: Persisted theme mode (**System**, **Light**, **Dark**), accent color, text scale (`85%`–`135%`), and **Reduce motion**.
 - **Window state persistence**: Restores the last non-fullscreen window position (validated against active displays so windows never open off-screen), size, and fullscreen state across launches.
-- **Keybindings with dispatch & conflict warnings**: Filter by action or key combination (case-insensitive), click a shortcut to rebind, or press Backspace to clear. Duplicate bindings and conflicts with the reserved Settings shortcut are highlighted. Use `app_action_pressed()` to trigger actions from `frame()`.
+- **Keybindings with dispatch & conflict warnings**: Filter by action or key combination (case-insensitive), click a shortcut to rebind, or press Backspace to clear. Duplicate bindings and conflicts with the reserved Settings shortcut are highlighted.
 - **Command Palette**: Press **⌘K** on macOS or **Ctrl+K** on Windows/Linux (rebindable in Keybindings) to search navigation, theme switching, fullscreen, and app actions.
-- **Toast notifications & Settings file tools**: Import, export, reset (with confirmation), or reveal the settings folder directly from Settings or About.
+- **Toast notifications & Settings file tools**: Import, export, reset (with confirmation), or reveal the settings folder directly from Settings or About. Unknown fields in imported `settings.json` files are safely ignored across versions.
 - **CLI flags**: `--help` (`-h`), `--version` (`-v`), `--settings <path>`, and `--software` (force software renderer).
 
 Settings, appearance, window state, and keybinding changes autosave to:
