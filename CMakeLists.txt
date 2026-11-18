@@ -15,30 +15,54 @@ FetchContent_Declare(yyjson
     GIT_TAG 6447536015f3d600f3d65323b10976103b337ca7)
 FetchContent_MakeAvailable(cui yyjson)
 
-add_compile_definitions("APP_NAME=\"${APP_NAME}\"" "APP_VERSION=\"${PROJECT_VERSION}\"")
+add_library(app_common INTERFACE)
+target_compile_definitions(app_common INTERFACE
+    "APP_NAME=\"${APP_NAME}\""
+    "APP_VERSION=\"${PROJECT_VERSION}\"")
 if(MSVC)
-    add_compile_options(/utf-8)
+    target_compile_options(app_common INTERFACE /utf-8 /W4)
+else()
+    target_compile_options(app_common INTERFACE -Wall -Wextra)
 endif()
 
-add_library(app_settings STATIC settings.c)
-target_link_libraries(app_settings PRIVATE cui::cui yyjson)
-if(WIN32)
-    target_link_libraries(app_settings PRIVATE uuid shell32 ole32 advapi32)
-endif()
-
-add_library(app_chrome STATIC app_chrome.c)
-target_link_libraries(app_chrome PUBLIC app_settings cui::cui)
-
-add_executable(empty_gui MACOSX_BUNDLE main.c)
-target_link_libraries(empty_gui PRIVATE app_chrome app_settings cui::cui)
-cui_app_target(empty_gui)
 if(APPLE)
     enable_language(OBJC)
-    target_sources(app_settings PRIVATE macos_settings.m)
-    target_link_libraries(app_settings PRIVATE "-framework Foundation")
-    target_sources(app_chrome PRIVATE macos_menu.m)
+    add_library(app_platform STATIC src/platform/platform_macos.m)
+    set_source_files_properties(src/platform/platform_macos.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(app_platform PRIVATE "-framework Cocoa")
+elseif(WIN32)
+    add_library(app_platform STATIC src/platform/platform_win32.c)
+    target_link_libraries(app_platform PRIVATE advapi32 user32)
+else()
+    add_library(app_platform STATIC src/platform/platform_x11.c)
+    target_link_libraries(app_platform PRIVATE cui::cui)
+endif()
+target_include_directories(app_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/platform")
+target_link_libraries(app_platform PRIVATE app_common)
+
+add_library(app_settings STATIC src/settings/settings.c)
+target_include_directories(app_settings PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/settings")
+target_link_libraries(app_settings PUBLIC app_platform cui::cui PRIVATE app_common yyjson)
+if(WIN32)
+    target_link_libraries(app_settings PRIVATE uuid shell32 ole32)
+endif()
+
+add_library(app_chrome STATIC
+    src/chrome/app_chrome.c
+    src/chrome/settings_dialog.c
+    src/chrome/command_palette.c)
+target_include_directories(app_chrome PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/chrome")
+target_link_libraries(app_chrome PUBLIC app_settings PRIVATE app_common)
+if(APPLE)
+    target_sources(app_chrome PRIVATE src/platform/app_menu_macos.m)
+    set_source_files_properties(src/platform/app_menu_macos.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(app_chrome PRIVATE "-framework Cocoa")
-    set_source_files_properties(macos_menu.m macos_settings.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()
+
+add_executable(empty_gui MACOSX_BUNDLE main.c)
+target_link_libraries(empty_gui PRIVATE app_chrome app_common cui::cui)
+cui_app_target(empty_gui)
+if(APPLE)
     set_target_properties(empty_gui PROPERTIES
         OUTPUT_NAME "${APP_NAME}"
         MACOSX_BUNDLE_BUNDLE_NAME "${APP_NAME}"
@@ -56,16 +80,24 @@ if(BUILD_TESTING)
         CUI_SCREENSHOT_FRAMES=1 $<TARGET_FILE:empty_gui>)
     set_tests_properties(window_smoke PROPERTIES
         TIMEOUT 15 PASS_REGULAR_EXPRESSION "cui: saved")
+
     add_executable(settings_test tests/settings_test.c)
-    target_link_libraries(settings_test PRIVATE app_chrome app_settings cui::cui)
+    target_link_libraries(settings_test PRIVATE app_chrome app_common)
     add_test(NAME settings COMMAND settings_test "${CMAKE_CURRENT_BINARY_DIR}/settings-test")
     set_tests_properties(settings PROPERTIES TIMEOUT 15)
+
+    add_executable(chrome_test tests/chrome_test.c)
+    target_link_libraries(chrome_test PRIVATE app_chrome app_common)
+    add_test(NAME chrome COMMAND chrome_test "${CMAKE_CURRENT_BINARY_DIR}/chrome-test")
+    set_tests_properties(chrome PROPERTIES TIMEOUT 15)
+
     if(APPLE)
         add_executable(macos_menu_test tests/macos_menu_test.m)
         set_source_files_properties(tests/macos_menu_test.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-        target_link_libraries(macos_menu_test PRIVATE app_chrome app_settings cui::cui)
-        add_test(NAME macos_menu COMMAND macos_menu_test)
+        target_link_libraries(macos_menu_test PRIVATE app_chrome app_common)
+        add_test(NAME macos_menu COMMAND macos_menu_test "${CMAKE_CURRENT_BINARY_DIR}/macos-menu-test")
         set_tests_properties(macos_menu PROPERTIES TIMEOUT 15 RUN_SERIAL TRUE)
+
         add_test(NAME run_script_smoke COMMAND ${CMAKE_COMMAND} -E env
             "BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
             "BUILD_CONFIG=$<CONFIG>"

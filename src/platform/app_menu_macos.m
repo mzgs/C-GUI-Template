@@ -1,6 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #include <cui/cui_app.h>
-#include "macos_menu.h"
+#include "app_menu.h"
 
 static bool combo_equal(cui_key_combo a, cui_key_combo b) {
     return a.key == b.key && a.mods == b.mods;

@@ -1,0 +1,316 @@
+#include "chrome_internal.h"
+#include "platform.h"
+#include <math.h>
+#include <stdio.h>
+
+static void setting_row_begin(cui_ctx *ui, const char *label, bool compact, bool center) {
+    cui_box_begin(ui, &(cui_box){
+        .dir = compact ? CUI_COLUMN : CUI_ROW,
+        .gap = compact ? 6 : 16,
+        .align = center ? (compact ? CUI_ALIGN_STRETCH : CUI_ALIGN_CENTER) : CUI_ALIGN_DEFAULT,
+    });
+    cui_text(ui, label, .font = CUI_FONT_MEDIUM, .width = compact ? CUI_FILL : CUI_PX(168));
+}
+
+static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) {
+    bool changed = false;
+    bool (*dialog_fn)(const cui_file_dialog_opts *, char *, size_t) =
+        chrome->file_dialog ? chrome->file_dialog : chrome_default_file_dialog;
+
+    setting_row_begin(ui, "Example string", compact, false);
+    int flags = cui_input(ui, "example-string", chrome->settings.example_string,
+                          sizeof chrome->settings.example_string, .width = CUI_FILL);
+    if (flags & CUI_CHANGED) {
+        chrome->settings_dirty = true;
+        chrome->status = NULL;
+    }
+    if (chrome->settings_dirty && (flags & (CUI_SUBMITTED | CUI_BLURRED))) changed = true;
+    cui_box_end(ui);
+
+    setting_row_begin(ui, "Example number (0–100)", compact, false);
+    double previous = chrome->settings.example_number;
+    if (cui_number(ui, "example-number", &chrome->settings.example_number,
+                   EXAMPLE_NUMBER_MIN, EXAMPLE_NUMBER_MAX, .width = CUI_FILL)) {
+        if (isfinite(chrome->settings.example_number)) {
+            changed = true;
+            chrome->status = NULL;
+        } else {
+            chrome->settings.example_number = previous;
+        }
+    }
+    cui_box_end(ui);
+
+    cui_separator(ui);
+
+    setting_row_begin(ui, "Settings file", compact, false);
+    cui_row(ui, .width = CUI_FILL, .gap = 8, .wrap = true) {
+        if (cui_button(ui, "Import…", .icon = CUI_ICON_UPLOAD)) {
+            char path[4096];
+            if (dialog_fn(&(cui_file_dialog_opts){
+                    .kind = CUI_FILE_OPEN,
+                    .title = "Import Settings",
+                    .filter_name = "JSON",
+                    .filter = "json",
+                }, path, sizeof path)) {
+                if (app_settings_load(&chrome->settings, path)) {
+                    chrome_reload_appearance(chrome, ui);
+                    chrome->settings_dirty = false;
+                    changed = false;
+                    if (chrome_save_settings(chrome, ui))
+                        app_chrome_notify(chrome, ui, "Settings imported.", CUI_TONE_SUCCESS);
+                } else {
+                    app_chrome_notify(chrome, ui, "Couldn’t import settings.", CUI_TONE_DANGER);
+                }
+            }
+        }
+        if (cui_button(ui, "Export…", .icon = CUI_ICON_DOWNLOAD)) {
+            char path[4096];
+            if (dialog_fn(&(cui_file_dialog_opts){
+                    .kind = CUI_FILE_SAVE,
+                    .title = "Export Settings",
+                    .filter_name = "JSON",
+                    .filter = "json",
+                    .default_name = "settings.json",
+                }, path, sizeof path)) {
+                if (app_settings_save(&chrome->settings, path))
+                    app_chrome_notify(chrome, ui, "Settings exported.", CUI_TONE_SUCCESS);
+                else
+                    app_chrome_notify(chrome, ui, "Couldn’t export settings.", CUI_TONE_DANGER);
+            }
+        }
+        if (cui_button(ui, "Open Folder", .icon = CUI_ICON_FOLDER_OPEN)) {
+            chrome_open_settings_folder(chrome, ui);
+        }
+    }
+    cui_box_end(ui);
+
+    setting_row_begin(ui, "Reset settings", compact, false);
+    if (cui_confirm_button(ui, "Reset", .icon = CUI_ICON_ROTATE_CCW, .confirm_label = "Confirm")) {
+        chrome->settings = app_chrome_default_settings();
+        chrome_reload_appearance(chrome, ui);
+        if (cui_app_ui(NULL) == ui) {
+            if (cui_app_is_fullscreen(NULL)) cui_app_set_fullscreen(NULL, false);
+            cui_app_set_size(NULL, chrome->settings.window.width, chrome->settings.window.height);
+            void *native = cui_app_native_window(NULL);
+            const char *backend = cui_app_backend(NULL);
+            app_window_center(native, backend);
+            int x = 0, y = 0;
+            chrome->observed_window_has_pos = app_window_get_pos(native, backend, &x, &y);
+            chrome->observed_window_x = x;
+            chrome->observed_window_y = y;
+        }
+        chrome->settings_dirty = false;
+        changed = false;
+        if (chrome_save_settings(chrome, ui))
+            app_chrome_notify(chrome, ui, "Settings reset to defaults.", CUI_TONE_INFO);
+    }
+    cui_box_end(ui);
+
+    return changed;
+}
+
+static bool draw_appearance_section(app_chrome *chrome, cui_ctx *ui, bool compact) {
+    static const char *const theme_labels[APP_THEME_COUNT] = { "System", "Light", "Dark" };
+    static const char *const theme_icons[APP_THEME_COUNT] = {
+        CUI_ICON_MONITOR, CUI_ICON_SUN, CUI_ICON_MOON
+    };
+    static const char *const accent_labels[CUI_ACCENT_COUNT] = {
+        "Neutral", "Violet", "Blue", "Green", "Amber", "Orange", "Coral", "Rose"
+    };
+    bool changed = false;
+
+    setting_row_begin(ui, "Theme", compact, true);
+    int mode = (int)chrome->settings.appearance.theme_mode;
+    bool theme_changed = compact
+        ? cui_select(ui, "theme-mode", theme_labels, APP_THEME_COUNT, &mode,
+                     .icons = theme_icons, .width = CUI_FILL)
+        : cui_segmented(ui, "theme-mode", theme_labels, APP_THEME_COUNT, &mode,
+                        .icons = theme_icons);
+    if (theme_changed) {
+        chrome->settings.appearance.theme_mode = (app_theme_mode)mode;
+        chrome->env_theme_override = false;
+        chrome_apply_appearance(chrome, ui);
+        changed = true;
+    }
+    cui_box_end(ui);
+
+    setting_row_begin(ui, "Accent color", compact, true);
+    int accent = (int)chrome->settings.appearance.accent;
+    if (cui_select(ui, "accent-color", accent_labels, CUI_ACCENT_COUNT, &accent, .width = CUI_FILL)) {
+        chrome->settings.appearance.accent = (cui_accent)accent;
+        chrome->env_accent_override = false;
+        chrome_apply_appearance(chrome, ui);
+        changed = true;
+    }
+    cui_box_end(ui);
+
+    setting_row_begin(ui, "Text scale", compact, true);
+    float percent = roundf(chrome->settings.appearance.font_scale * 100.0f);
+    if (cui_slider(ui, "##text-scale", &percent,
+                   FONT_SCALE_MIN * 100.0f, FONT_SCALE_MAX * 100.0f,
+                   .step = 5.0f, .show_value = true, .format = "%.0f%%",
+                   .width = CUI_FILL)) {
+        chrome->settings.appearance.font_scale = percent / 100.0f;
+        chrome_apply_appearance(chrome, ui);
+        changed = true;
+    }
+    cui_box_end(ui);
+
+    cui_separator(ui);
+    if (cui_switch(ui, "Reduce motion", &chrome->settings.appearance.reduced_motion,
+                   .description = "Disable UI animations")) {
+        chrome->appearance_force_motion = true;
+        chrome_apply_appearance(chrome, ui);
+        changed = true;
+    }
+
+    return changed;
+}
+
+static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
+    bool changed = false;
+    cui_table_column columns[] = {
+        { "Action", CUI_FILL, CUI_TEXT_LEFT, false },
+        { "Keys", CUI_PX(240), CUI_TEXT_LEFT, false },
+    };
+    cui_secondary(ui, "Click a shortcut, then press a key combination. Backspace clears.");
+    cui_search(ui, "keybinding-filter", chrome->keybinding_filter,
+               sizeof chrome->keybinding_filter,
+               .placeholder = "Filter actions or keys...", .width = CUI_FILL);
+
+    bool has_conflict = false;
+    for (int i = 0; i < APP_ACTION_COUNT; ++i) {
+        if (app_keybinding_conflict(&chrome->settings, (app_action)i) != APP_CONFLICT_NONE) {
+            has_conflict = true;
+            break;
+        }
+    }
+    if (has_conflict) {
+        cui_alert(ui, "Shortcut conflict",
+                  .description = "Duplicate or reserved shortcuts are highlighted below.",
+                  .tone = CUI_TONE_WARNING);
+    }
+
+    int visible = 0;
+    cui_table(ui, "keybindings", columns, 2, .striped = true, .compact = true, .height = CUI_FILL) {
+        for (int i = 0; i < APP_ACTION_COUNT; ++i) {
+            const char *action = chrome->settings.keybindings[i].action;
+            cui_key_combo *combo = &chrome->settings.keybindings[i].combo;
+            if (!app_contains_ignore_case(action, chrome->keybinding_filter) &&
+                !app_contains_ignore_case(cui_shortcut_label(ui, *combo), chrome->keybinding_filter))
+                continue;
+            ++visible;
+            int conflict = app_keybinding_conflict(&chrome->settings, (app_action)i);
+            cui_table_row(ui, false);
+            if (conflict == APP_CONFLICT_NONE) {
+                cui_table_cell_text(ui, action);
+            } else {
+                cui_table_cell(ui);
+                cui_text(ui, action);
+                cui_badge(ui, conflict == APP_CONFLICT_SETTINGS ? "Reserved" : "Conflict",
+                          .tone = CUI_TONE_WARNING, .size = CUI_SIZE_SM);
+            }
+            cui_table_cell(ui);
+            cui_theme *theme = cui_theme_get(ui);
+            float control_height = theme->control_md;
+            theme->control_md = theme->control_sm;
+            if (cui_shortcut_recorder(ui, action, combo, .width = CUI_FILL)) changed = true;
+            theme->control_md = control_height;
+        }
+    }
+    if (!visible) cui_secondary(ui, "No shortcuts match your filter.");
+    return changed;
+}
+
+static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
+    cui_text(ui, APP_NAME, .font = CUI_FONT_MEDIUM);
+    cui_secondary(ui, "Version " APP_VERSION);
+    cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");
+    cui_separator(ui);
+    const char *backend = cui_app_backend(NULL);
+    const char *renderer = cui_app_ui(NULL)
+        ? (cui_app_is_software(NULL) ? "Software" : "OpenGL")
+        : "Headless";
+    char runtime_info[128];
+    snprintf(runtime_info, sizeof runtime_info, "Backend: %s  ·  Renderer: %s",
+             backend ? backend : "unknown", renderer);
+    cui_secondary(ui, runtime_info);
+    char dir[4096];
+    if (app_settings_dir(dir, sizeof dir, chrome->settings_path, false)) {
+        cui_secondary(ui, dir);
+    }
+    cui_row(ui, .gap = 8, .wrap = true) {
+        if (cui_button(ui, "Open Settings Folder", .icon = CUI_ICON_FOLDER_OPEN)) {
+            chrome_open_settings_folder(chrome, ui);
+        }
+    }
+}
+
+void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
+    static const char *const sections[SETTINGS_SECTION_COUNT] = {
+        "General", "Appearance", "Keybindings", "About"
+    };
+    static const char *const icons[SETTINGS_SECTION_COUNT] = {
+        CUI_ICON_SETTINGS, CUI_ICON_PALETTE, CUI_ICON_KEYBOARD, CUI_ICON_INFO
+    };
+
+    cui_vec2 size = cui_viewport_size(ui);
+    bool compact = size.x < 600.0f;
+
+    cui_dialog(ui, "Settings", &chrome->settings_open, .width = size.x * 0.9f) {
+        /* shortcut: pinned CUI adds 94pt for the header, padding and gap; revisit if its layout changes. */
+        cui_column(ui, .height = CUI_PX(fminf(size.y * 0.9f, size.y - 48) - 94)) {
+            cui_row(ui, .height = CUI_FILL, .gap = 16, .align = CUI_ALIGN_STRETCH) {
+                cui_column(ui, .width = CUI_PCT(30), .min_width = 128, .max_width = 180,
+                           .height = CUI_FILL) {
+                    cui_scroll(ui, .id = "settings-sidebar", .gap = 4) {
+                        for (int i = 0; i < SETTINGS_SECTION_COUNT; ++i) {
+                            if (i == SETTINGS_SECTION_ABOUT) cui_separator(ui);
+                            if (cui_nav_item(ui, sections[i], .icon = icons[i],
+                                             .selected = chrome->settings_section == i,
+                                             .group = "settings-sections")) {
+                                if (chrome->settings_section != i) chrome->status = NULL;
+                                chrome->settings_section = i;
+                            }
+                        }
+                    }
+                }
+                cui_separator(ui);
+                cui_scroll(ui, .id = "settings-page", .width = CUI_FILL) {
+                    cui_column(ui, .height = chrome->settings_section == SETTINGS_SECTION_KEYBINDINGS ? CUI_FILL : CUI_FIT,
+                               .gap = 12) {
+                        bool changed = false;
+                        cui_heading(ui, sections[chrome->settings_section], 4);
+                        switch (chrome->settings_section) {
+                        case SETTINGS_SECTION_GENERAL:
+                            changed = draw_general_section(chrome, ui, compact);
+                            break;
+                        case SETTINGS_SECTION_APPEARANCE:
+                            changed = draw_appearance_section(chrome, ui, compact);
+                            break;
+                        case SETTINGS_SECTION_KEYBINDINGS:
+                            changed = draw_keybindings_section(chrome, ui);
+                            break;
+                        default:
+                            draw_about_section(chrome, ui);
+                            break;
+                        }
+                        if (changed || (chrome->settings_dirty && chrome->settings_section != SETTINGS_SECTION_GENERAL)) {
+                            chrome_save_settings(chrome, ui);
+                            chrome->settings_dirty = false;
+                        }
+                        if (chrome->settings_save_failed) cui_secondary(ui, "Couldn’t save settings.");
+                    }
+                }
+            }
+        }
+    }
+    if (!chrome->settings_open) {
+        if (chrome->prev_settings_open) chrome->status = NULL;
+        if (chrome->settings_dirty) {
+            chrome_save_settings(chrome, ui);
+            chrome->settings_dirty = false;
+        }
+    }
+    chrome->prev_settings_open = chrome->settings_open;
+}

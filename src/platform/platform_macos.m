@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
+#include "platform.h"
 #include <math.h>
-#include <stdbool.h>
+#include <string.h>
 
 bool macos_settings_path(char *path, size_t capacity) {
     @autoreleasepool {
@@ -15,7 +16,7 @@ bool macos_settings_path(char *path, size_t capacity) {
     }
 }
 
-int macos_system_dark(void) {
+int app_system_dark(void) {
     if (@available(macOS 10.14, *)) {
         @autoreleasepool {
             NSAppearance *appearance = NSApp ? [NSApp effectiveAppearance] : nil;
@@ -32,17 +33,6 @@ int macos_system_dark(void) {
     return -1;
 }
 
-bool macos_window_get_pos(void *native_window, int *x, int *y) {
-    if (!native_window || !x || !y) return false;
-    @autoreleasepool {
-        NSWindow *win = (__bridge NSWindow *)native_window;
-        NSRect frame = win.frame;
-        *x = (int)llround(frame.origin.x);
-        *y = (int)llround(frame.origin.y);
-        return true;
-    }
-}
-
 static bool macos_rect_visible_on_any_screen(NSRect frame) {
     /* Ensure the top titlebar band is reachable on at least one active display. */
     CGFloat bar_h = frame.size.height < 32.0 ? frame.size.height : 32.0;
@@ -55,8 +45,22 @@ static bool macos_rect_visible_on_any_screen(NSRect frame) {
     return false;
 }
 
-bool macos_window_set_pos(void *native_window, int x, int y) {
-    if (!native_window) return false;
+bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y) {
+    if (!native_window || !backend || !x || !y || strcmp(backend, "cocoa") != 0) return false;
+    @autoreleasepool {
+        NSWindow *win = (__bridge NSWindow *)native_window;
+        NSRect frame = win.frame;
+        *x = (int)llround(frame.origin.x);
+        *y = (int)llround(frame.origin.y);
+        return true;
+    }
+}
+
+bool app_window_set_pos(void *native_window, const char *backend, int x, int y) {
+    if (!native_window || !backend || strcmp(backend, "cocoa") != 0) return false;
+    if (x < APP_WINDOW_POS_MIN || x > APP_WINDOW_POS_MAX ||
+        y < APP_WINDOW_POS_MIN || y > APP_WINDOW_POS_MAX)
+        return false;
     @autoreleasepool {
         NSWindow *win = (__bridge NSWindow *)native_window;
         NSRect frame = win.frame;
@@ -67,8 +71,8 @@ bool macos_window_set_pos(void *native_window, int x, int y) {
     }
 }
 
-void macos_window_center(void *native_window) {
-    if (!native_window) return;
+void app_window_center(void *native_window, const char *backend) {
+    if (!native_window || !backend || strcmp(backend, "cocoa") != 0) return;
     @autoreleasepool {
         NSWindow *win = (__bridge NSWindow *)native_window;
         [win center];

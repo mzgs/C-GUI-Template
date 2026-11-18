@@ -28,21 +28,6 @@ enum { SETTINGS_PATH_CAP = MAX_PATH };
 #include <unistd.h>
 typedef char path_char;
 enum { SETTINGS_PATH_CAP = PATH_MAX };
-#if !defined(__APPLE__) && defined(__has_include)
-#if __has_include(<X11/Xlib.h>) && __has_include(<X11/Xatom.h>)
-#define APP_HAVE_X11 1
-#include <X11/Xlib.h>
-#include <X11/Xatom.h>
-#endif
-#endif
-#endif
-
-#ifdef __APPLE__
-bool macos_settings_path(char *path, size_t capacity);
-int macos_system_dark(void);
-bool macos_window_get_pos(void *native_window, int *x, int *y);
-bool macos_window_set_pos(void *native_window, int x, int y);
-void macos_window_center(void *native_window);
 #endif
 
 static bool settings_path(path_char *path, const char *override) {
@@ -150,176 +135,6 @@ bool app_settings_dir(char *out, size_t capacity, const char *override, bool cre
 #else
     int len = snprintf(out, capacity, "%s", dir);
     return len >= 0 && (size_t)len < capacity;
-#endif
-}
-
-int app_system_dark(void) {
-#ifdef __APPLE__
-    return macos_system_dark();
-#elif defined(_WIN32)
-    HKEY key;
-    DWORD value = 1, size = sizeof value;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER,
-                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-                      0, KEY_READ, &key) != ERROR_SUCCESS)
-        return -1;
-    LONG r = RegQueryValueExW(key, L"AppsUseLightTheme", NULL, NULL, (LPBYTE)&value, &size);
-    RegCloseKey(key);
-    if (r != ERROR_SUCCESS) return -1;
-    return value == 0 ? 1 : 0;
-#else
-    const char *gtk = getenv("GTK_THEME");
-    if (!gtk) return -1;
-    for (const char *p = gtk; *p; ++p) {
-        if (tolower((unsigned char)p[0]) == 'd' &&
-            tolower((unsigned char)p[1]) == 'a' &&
-            tolower((unsigned char)p[2]) == 'r' &&
-            tolower((unsigned char)p[3]) == 'k')
-            return 1;
-    }
-    return -1;
-#endif
-}
-
-#ifdef APP_HAVE_X11
-static Display *x11_display(void) {
-    static Display *dpy;
-    static bool tried;
-    if (!tried) {
-        tried = true;
-        dpy = XOpenDisplay(NULL);
-    }
-    return dpy;
-}
-
-static void x11_frame_extents(Display *dpy, Window win, int *left, int *top) {
-    *left = 0;
-    *top = 0;
-    Atom prop = XInternAtom(dpy, "_NET_FRAME_EXTENTS", True);
-    if (!prop) return;
-    Atom actual_type = 0;
-    int actual_format = 0;
-    unsigned long nitems = 0, bytes_after = 0;
-    unsigned char *data = NULL;
-    if (XGetWindowProperty(dpy, win, prop, 0, 4, False, XA_CARDINAL,
-                           &actual_type, &actual_format, &nitems, &bytes_after, &data) == Success && data) {
-        if (actual_format == 32 && nitems >= 4) {
-            long *extents = (long *)data;
-            *left = (int)extents[0];
-            *top = (int)extents[2];
-        }
-        XFree(data);
-    }
-}
-#endif
-
-bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y) {
-    if (!native_window || !backend || !x || !y) return false;
-#ifdef __APPLE__
-    if (strcmp(backend, "cocoa") == 0) return macos_window_get_pos(native_window, x, y);
-#elif defined(_WIN32)
-    if (strcmp(backend, "win32") == 0) {
-        RECT r;
-        if (!GetWindowRect((HWND)native_window, &r)) return false;
-        *x = (int)r.left;
-        *y = (int)r.top;
-        return true;
-    }
-#elif defined(APP_HAVE_X11)
-    if (strcmp(backend, "x11") == 0) {
-        Display *dpy = x11_display();
-        if (!dpy) return false;
-        Window win = (Window)(uintptr_t)native_window;
-        XWindowAttributes attr;
-        Window child = 0;
-        int rx = 0, ry = 0;
-        if (!XGetWindowAttributes(dpy, win, &attr) || !attr.root) return false;
-        if (!XTranslateCoordinates(dpy, win, attr.root, 0, 0, &rx, &ry, &child)) return false;
-        int left = 0, top = 0;
-        x11_frame_extents(dpy, win, &left, &top);
-        *x = rx - left;
-        *y = ry - top;
-        return true;
-    }
-#endif
-    return false;
-}
-
-bool app_window_set_pos(void *native_window, const char *backend, int x, int y) {
-    if (!native_window || !backend) return false;
-    if (x < WINDOW_POS_MIN || x > WINDOW_POS_MAX || y < WINDOW_POS_MIN || y > WINDOW_POS_MAX)
-        return false;
-#ifdef __APPLE__
-    if (strcmp(backend, "cocoa") == 0) return macos_window_set_pos(native_window, x, y);
-#elif defined(_WIN32)
-    if (strcmp(backend, "win32") == 0) {
-        HWND hwnd = (HWND)native_window;
-        RECT cur;
-        if (!GetWindowRect(hwnd, &cur)) return false;
-        LONG w = cur.right - cur.left;
-        LONG h = cur.bottom - cur.top;
-        LONG bar_h = h < 32 ? h : 32;
-        RECT titlebar = { x, y, x + w, y + bar_h };
-        HMONITOR mon = MonitorFromRect(&titlebar, MONITOR_DEFAULTTONULL);
-        if (!mon) return false;
-        MONITORINFO mi = { .cbSize = sizeof mi };
-        if (!GetMonitorInfoW(mon, &mi)) return false;
-        RECT overlap;
-        if (!IntersectRect(&overlap, &titlebar, &mi.rcWork) ||
-            (overlap.right - overlap.left) < 64 || (overlap.bottom - overlap.top) < 16)
-            return false;
-        return SetWindowPos(hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) != 0;
-    }
-#elif defined(APP_HAVE_X11)
-    if (strcmp(backend, "x11") == 0) {
-        Display *dpy = x11_display();
-        if (!dpy) return false;
-        Window win = (Window)(uintptr_t)native_window;
-        XWindowAttributes attr;
-        if (!XGetWindowAttributes(dpy, win, &attr)) return false;
-        int scr = DefaultScreen(dpy);
-        int sw = DisplayWidth(dpy, scr);
-        int sh = DisplayHeight(dpy, scr);
-        if (x + attr.width < 64 || x > sw - 64 || y < 0 || y > sh - 48) return false;
-        XMoveWindow(dpy, win, x, y);
-        XFlush(dpy);
-        return true;
-    }
-#endif
-    return false;
-}
-
-void app_window_center(void *native_window, const char *backend) {
-    if (!native_window || !backend) return;
-#ifdef __APPLE__
-    if (strcmp(backend, "cocoa") == 0) macos_window_center(native_window);
-#elif defined(_WIN32)
-    if (strcmp(backend, "win32") == 0) {
-        HWND hwnd = (HWND)native_window;
-        RECT r;
-        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO mi = { .cbSize = sizeof mi };
-        if (GetWindowRect(hwnd, &r) && mon && GetMonitorInfoW(mon, &mi)) {
-            int w = r.right - r.left;
-            int h = r.bottom - r.top;
-            int cx = mi.rcWork.left + ((mi.rcWork.right - mi.rcWork.left) - w) / 2;
-            int cy = mi.rcWork.top + ((mi.rcWork.bottom - mi.rcWork.top) - h) / 2;
-            SetWindowPos(hwnd, NULL, cx, cy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-    }
-#elif defined(APP_HAVE_X11)
-    if (strcmp(backend, "x11") == 0) {
-        Display *dpy = x11_display();
-        if (!dpy) return;
-        Window win = (Window)(uintptr_t)native_window;
-        XWindowAttributes attr;
-        if (!XGetWindowAttributes(dpy, win, &attr)) return;
-        int scr = DefaultScreen(dpy);
-        int cx = (DisplayWidth(dpy, scr) - attr.width) / 2;
-        int cy = (DisplayHeight(dpy, scr) - attr.height) / 2;
-        XMoveWindow(dpy, win, cx > 0 ? cx : 0, cy > 0 ? cy : 0);
-        XFlush(dpy);
-    }
 #endif
 }
 
@@ -523,26 +338,26 @@ bool app_settings_load(app_settings *settings, const char *override) {
 
     yyjson_val *appearance = yyjson_obj_get(root, "appearance");
     if (yyjson_is_obj(appearance)) {
-        app_theme_mode mode = loaded.theme_mode;
+        app_theme_mode mode = loaded.appearance.theme_mode;
         if (parse_theme_mode(yyjson_obj_get(appearance, "theme"), &mode)) {
-            loaded.theme_mode = mode;
+            loaded.appearance.theme_mode = mode;
             applied = true;
         }
-        cui_accent accent = loaded.accent;
+        cui_accent accent = loaded.appearance.accent;
         if (parse_accent(yyjson_obj_get(appearance, "accent"), &accent)) {
-            loaded.accent = accent;
+            loaded.appearance.accent = accent;
             applied = true;
         }
         double scale = json_number(yyjson_obj_get(appearance, "font_scale"));
         if (isfinite(scale) && scale >= FONT_SCALE_MIN - 1e-4 && scale <= FONT_SCALE_MAX + 1e-4) {
             if (scale < FONT_SCALE_MIN) scale = FONT_SCALE_MIN;
             if (scale > FONT_SCALE_MAX) scale = FONT_SCALE_MAX;
-            loaded.font_scale = (float)scale;
+            loaded.appearance.font_scale = (float)scale;
             applied = true;
         }
         yyjson_val *reduced = yyjson_obj_get(appearance, "reduced_motion");
         if (yyjson_is_bool(reduced)) {
-            loaded.reduced_motion = yyjson_get_bool(reduced);
+            loaded.appearance.reduced_motion = yyjson_get_bool(reduced);
             applied = true;
         }
     }
@@ -551,26 +366,26 @@ bool app_settings_load(app_settings *settings, const char *override) {
     if (yyjson_is_obj(window)) {
         double wx = json_number(yyjson_obj_get(window, "x"));
         double wy = json_number(yyjson_obj_get(window, "y"));
-        if (wx >= WINDOW_POS_MIN && wx <= WINDOW_POS_MAX && wx == floor(wx) &&
-            wy >= WINDOW_POS_MIN && wy <= WINDOW_POS_MAX && wy == floor(wy)) {
-            loaded.window_has_pos = true;
-            loaded.window_x = (int)wx;
-            loaded.window_y = (int)wy;
+        if (wx >= APP_WINDOW_POS_MIN && wx <= APP_WINDOW_POS_MAX && wx == floor(wx) &&
+            wy >= APP_WINDOW_POS_MIN && wy <= APP_WINDOW_POS_MAX && wy == floor(wy)) {
+            loaded.window.has_pos = true;
+            loaded.window.x = (int)wx;
+            loaded.window.y = (int)wy;
             applied = true;
         }
         double width = json_number(yyjson_obj_get(window, "width"));
         if (width >= WINDOW_WIDTH_MIN && width <= WINDOW_WIDTH_MAX && width == floor(width)) {
-            loaded.window_width = (int)width;
+            loaded.window.width = (int)width;
             applied = true;
         }
         double height = json_number(yyjson_obj_get(window, "height"));
         if (height >= WINDOW_HEIGHT_MIN && height <= WINDOW_HEIGHT_MAX && height == floor(height)) {
-            loaded.window_height = (int)height;
+            loaded.window.height = (int)height;
             applied = true;
         }
         yyjson_val *fullscreen = yyjson_obj_get(window, "fullscreen");
         if (yyjson_is_bool(fullscreen)) {
-            loaded.window_fullscreen = yyjson_get_bool(fullscreen);
+            loaded.window.fullscreen = yyjson_get_bool(fullscreen);
             applied = true;
         }
     }
@@ -608,26 +423,28 @@ bool app_settings_save(const app_settings *settings, const char *override) {
         yyjson_mut_obj_add_str(doc, root, "example_string", settings->example_string) &&
         yyjson_mut_obj_add_real(doc, root, "example_number", settings->example_number);
 
-    const char *theme_name = (settings->theme_mode >= 0 && settings->theme_mode < APP_THEME_COUNT)
-        ? theme_names[settings->theme_mode] : theme_names[APP_THEME_SYSTEM];
+    const char *theme_name = (settings->appearance.theme_mode >= 0 &&
+                              settings->appearance.theme_mode < APP_THEME_COUNT)
+        ? theme_names[settings->appearance.theme_mode] : theme_names[APP_THEME_SYSTEM];
     yyjson_mut_val *appearance = ok ? yyjson_mut_obj(doc) : NULL;
     ok = ok && appearance &&
         yyjson_mut_obj_add_str(doc, appearance, "theme", theme_name) &&
-        yyjson_mut_obj_add_str(doc, appearance, "accent", cui_accent_name(settings->accent)) &&
-        yyjson_mut_obj_add_real(doc, appearance, "font_scale", round((double)settings->font_scale * 100.0) / 100.0) &&
-        yyjson_mut_obj_add_bool(doc, appearance, "reduced_motion", settings->reduced_motion) &&
+        yyjson_mut_obj_add_str(doc, appearance, "accent", cui_accent_name(settings->appearance.accent)) &&
+        yyjson_mut_obj_add_real(doc, appearance, "font_scale",
+                                round((double)settings->appearance.font_scale * 100.0) / 100.0) &&
+        yyjson_mut_obj_add_bool(doc, appearance, "reduced_motion", settings->appearance.reduced_motion) &&
         yyjson_mut_obj_add_val(doc, root, "appearance", appearance);
 
     yyjson_mut_val *window = ok ? yyjson_mut_obj(doc) : NULL;
     ok = ok && window;
-    if (ok && settings->window_has_pos) {
-        ok = yyjson_mut_obj_add_int(doc, window, "x", settings->window_x) &&
-             yyjson_mut_obj_add_int(doc, window, "y", settings->window_y);
+    if (ok && settings->window.has_pos) {
+        ok = yyjson_mut_obj_add_int(doc, window, "x", settings->window.x) &&
+             yyjson_mut_obj_add_int(doc, window, "y", settings->window.y);
     }
     ok = ok &&
-        yyjson_mut_obj_add_int(doc, window, "width", settings->window_width) &&
-        yyjson_mut_obj_add_int(doc, window, "height", settings->window_height) &&
-        yyjson_mut_obj_add_bool(doc, window, "fullscreen", settings->window_fullscreen) &&
+        yyjson_mut_obj_add_int(doc, window, "width", settings->window.width) &&
+        yyjson_mut_obj_add_int(doc, window, "height", settings->window.height) &&
+        yyjson_mut_obj_add_bool(doc, window, "fullscreen", settings->window.fullscreen) &&
         yyjson_mut_obj_add_val(doc, root, "window", window);
 
     yyjson_mut_val *keybindings = ok ? yyjson_mut_obj(doc) : NULL;

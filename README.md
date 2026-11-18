@@ -1,7 +1,7 @@
 # C-GUI-Template
 
 A cross-platform, resizable C99 desktop app template using [Better-C-UI](https://github.com/mzgs/Better-C-UI).
-Add your state, action handlers, and UI calls inside `main.c` (`app_state`, `on_action()`, and `frame()`). Template chrome (Settings dialog, Command Palette, menu bar, window persistence, and CLI parsing) lives separately in `app_chrome.c`.
+Add your state, action handlers, and UI calls inside `main.c` (`app_state`, `on_action()`, and `frame()`). Template scaffolding lives under `src/`.
 
 ## Quick start (macOS)
 
@@ -12,6 +12,17 @@ Add your state, action handlers, and UI calls inside `main.c` (`app_state`, `on_
 The script works from any directory, configures the first build, and lets CMake
 rebuild changed files before launching. When nothing changed, it runs the existing
 app without recompiling. A failed build stops the script before launch.
+
+## Project layout
+
+```text
+main.c                 App entry point (state, action handler, frame UI)
+src/
+  chrome/              Lifecycle, CLI parsing, Settings dialog, Command Palette
+  settings/            JSON persistence, atomic writes, keybinding dispatch & conflicts
+  platform/            OS dark-mode detection, window positioning, macOS native menu bar
+tests/                 Settings, chrome/UI, and macOS native menu tests
+```
 
 ## Built-in features
 

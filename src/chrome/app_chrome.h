@@ -29,12 +29,21 @@ typedef struct {
 typedef void (*app_action_handler)(cui_ctx *ui, app_action action, void *user);
 
 typedef struct {
+    /* Settings & CLI options */
     app_settings settings;
     app_cli_opts cli;
     const char *settings_path;
+
+    /* Chrome UI state */
     bool settings_open;
-    bool prev_settings_open;
     bool palette_open;
+    int settings_section;
+    char keybinding_filter[128];
+    const char *status;
+    cui_tone status_tone;
+
+    /* Internal lifecycle & persistence tracking */
+    bool prev_settings_open;
     bool settings_save_failed;
     bool settings_dirty;
     bool window_dirty;
@@ -49,15 +58,14 @@ typedef struct {
     bool appearance_force_motion;
     bool env_theme_override;
     bool env_accent_override;
-    const char *status;
-    cui_tone status_tone;
-    int settings_section;
-    char keybinding_filter[128];
     int pending_action;
     cui_key pending_edit_key;
     cui_key injected_edit_key;
+
+    /* Action callback */
     app_action_handler on_action;
     void *on_action_user;
+
     /* Injectable platform hooks (default to CUI / OS implementations). */
     bool (*file_dialog)(const cui_file_dialog_opts *opts, char *out, size_t cap);
     bool (*open_url)(const char *url);
@@ -66,7 +74,6 @@ typedef struct {
 
 app_settings app_chrome_default_settings(void);
 app_cli_action app_chrome_parse_cli(int argc, char **argv, app_cli_opts *opts, FILE *out, FILE *err);
-bool app_contains_ignore_case(const char *text, const char *query);
 
 /* Reset chrome to defaults without parsing CLI or reading disk. */
 void app_chrome_reset(app_chrome *chrome, const char *settings_path);

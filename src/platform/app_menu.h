@@ -1,5 +1,5 @@
-#ifndef MACOS_MENU_H
-#define MACOS_MENU_H
+#ifndef APP_MENU_H
+#define APP_MENU_H
 
 #include <stdbool.h>
 #include "settings.h"

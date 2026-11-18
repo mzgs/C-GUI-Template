@@ -4,6 +4,14 @@ This is a C99 desktop app using [Better-C-UI](https://github.com/mzgs/Better-C-U
 Keep changes small and use existing CUI components before adding custom drawing
 or dependencies.
 
+## Layout
+
+- `main.c`: user-facing entry point (`app_state`, `on_action()`, `frame()`, `main()`).
+- `src/chrome/`: app chrome (`app_chrome.{h,c}`, `settings_dialog.c`, `command_palette.c`).
+- `src/settings/`: JSON persistence, atomic writes, and keybinding helpers (`settings.{h,c}`).
+- `src/platform/`: OS-specific dark mode, window positioning, and macOS native menu bar (`platform.h`, `platform_*.{c,m}`, `app_menu.h`, `app_menu_macos.m`).
+- `tests/`: unit and UI tests (`settings_test.c`, `chrome_test.c`, `macos_menu_test.m`).
+
 ## Library reference
 
 - `CMakeLists.txt` pins the library revision through FetchContent. Preserve the
@@ -44,8 +52,9 @@ cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The smoke test needs a graphical desktop, saves `build/window-smoke.png`, and
-checks startup, rendering, and exit. It does not test widget interactions.
+CTest runs `window_smoke`, `settings`, `chrome`, and (on macOS) `macos_menu` and
+`run_script_smoke`. The smoke tests need a graphical desktop, save
+`build/window-smoke.png`, and check startup, rendering, and exit.
 For UI changes, also run the app and exercise the changed interactions,
 keyboard navigation, resizing, and light/dark themes. On macOS launch with
 `./run.sh` to build changed files and run; see `README.md` for other platforms.
