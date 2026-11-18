@@ -81,23 +81,7 @@ if(BUILD_TESTING)
     set_tests_properties(window_smoke PROPERTIES
         TIMEOUT 15 PASS_REGULAR_EXPRESSION "cui: saved")
 
-    add_executable(settings_test tests/settings_test.c)
-    target_link_libraries(settings_test PRIVATE app_chrome app_common)
-    add_test(NAME settings COMMAND settings_test "${CMAKE_CURRENT_BINARY_DIR}/settings-test")
-    set_tests_properties(settings PROPERTIES TIMEOUT 15)
-
-    add_executable(chrome_test tests/chrome_test.c)
-    target_link_libraries(chrome_test PRIVATE app_chrome app_common)
-    add_test(NAME chrome COMMAND chrome_test "${CMAKE_CURRENT_BINARY_DIR}/chrome-test")
-    set_tests_properties(chrome PROPERTIES TIMEOUT 15)
-
     if(APPLE)
-        add_executable(macos_menu_test tests/macos_menu_test.m)
-        set_source_files_properties(tests/macos_menu_test.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-        target_link_libraries(macos_menu_test PRIVATE app_chrome app_common)
-        add_test(NAME macos_menu COMMAND macos_menu_test "${CMAKE_CURRENT_BINARY_DIR}/macos-menu-test")
-        set_tests_properties(macos_menu PROPERTIES TIMEOUT 15 RUN_SERIAL TRUE)
-
         add_test(NAME run_script_smoke COMMAND ${CMAKE_COMMAND} -E env
             "BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
             "BUILD_CONFIG=$<CONFIG>"

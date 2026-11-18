@@ -21,7 +21,6 @@ src/
   chrome/              Lifecycle, CLI parsing, Settings dialog, Command Palette
   settings/            JSON persistence, atomic writes, keybinding dispatch & conflicts
   platform/            OS dark-mode detection, window positioning, macOS native menu bar
-tests/                 Settings, chrome/UI, and macOS native menu tests
 ```
 
 ## Built-in features
@@ -67,7 +66,7 @@ open "build/C GUI Template.app"
 Run on Linux: `./build/empty_gui`. With Visual Studio on Windows:
 `build\Release\empty_gui.exe` (MinGW: `build\empty_gui.exe`).
 
-Verify window creation, settings, keybindings, command palette, CLI parsing, and clean exit:
+Verify window creation, rendering, and clean exit:
 
 ```sh
 ctest --test-dir build -C Release --output-on-failure

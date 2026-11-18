@@ -10,7 +10,6 @@ or dependencies.
 - `src/chrome/`: app chrome (`app_chrome.{h,c}`, `settings_dialog.c`, `command_palette.c`).
 - `src/settings/`: JSON persistence, atomic writes, and keybinding helpers (`settings.{h,c}`).
 - `src/platform/`: OS-specific dark mode, window positioning, and macOS native menu bar (`platform.h`, `platform_*.{c,m}`, `app_menu.h`, `app_menu_macos.m`).
-- `tests/`: unit and UI tests (`settings_test.c`, `chrome_test.c`, `macos_menu_test.m`).
 
 ## Library reference
 
@@ -52,8 +51,7 @@ cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-CTest runs `window_smoke`, `settings`, `chrome`, and (on macOS) `macos_menu` and
-`run_script_smoke`. The smoke tests need a graphical desktop, save
+CTest runs `window_smoke` and (on macOS) `run_script_smoke`. The smoke tests need a graphical desktop, save
 `build/window-smoke.png`, and check startup, rendering, and exit.
 For UI changes, also run the app and exercise the changed interactions,
 keyboard navigation, resizing, and light/dark themes. On macOS launch with
