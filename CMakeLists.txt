@@ -21,4 +21,11 @@ if(BUILD_TESTING)
         CUI_SCREENSHOT_FRAMES=1 $<TARGET_FILE:empty_gui>)
     set_tests_properties(window_smoke PROPERTIES
         TIMEOUT 15 PASS_REGULAR_EXPRESSION "cui: saved")
+    if(APPLE)
+        add_test(NAME run_script_smoke COMMAND ${CMAKE_COMMAND} -E env
+            "CUI_SCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/run-smoke.png"
+            CUI_SCREENSHOT_FRAMES=1 ${CMAKE_CURRENT_SOURCE_DIR}/run.sh)
+        set_tests_properties(run_script_smoke PROPERTIES
+            TIMEOUT 120 PASS_REGULAR_EXPRESSION "cui: saved" RUN_SERIAL TRUE)
+    endif()
 endif()

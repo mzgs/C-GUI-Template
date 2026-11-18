@@ -48,5 +48,5 @@ The smoke test needs a graphical desktop, saves `build/window-smoke.png`, and
 checks startup, rendering, and exit. It does not test widget interactions.
 For UI changes, also run the app and exercise the changed interactions,
 keyboard navigation, resizing, and light/dark themes. On macOS launch with
-`open build/empty_gui.app`; see `README.md` for other platforms.
+`./run.sh` to build changed files and run; see `README.md` for other platforms.
 Report checks performed and any platform or interaction left untested.

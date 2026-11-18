@@ -3,6 +3,16 @@
 An empty, resizable C99 GUI app using [Better-C-UI](https://github.com/mzgs/Better-C-UI).
 Add your UI calls inside `frame()` in `main.c`.
 
+On macOS, build and run with:
+
+```sh
+./run.sh
+```
+
+The script works from any directory, configures the first build, and lets CMake
+rebuild changed files before launching. When nothing changed, it runs the existing
+app without recompiling. A failed build stops the script before launch.
+
 Requires Git, CMake 3.14+, and a C compiler with the system SDK. On macOS,
 install Xcode Command Line Tools and CMake. Linux also needs X11 development
 headers (`libx11-dev` on Debian/Ubuntu). Windows supports Visual Studio or MinGW.
