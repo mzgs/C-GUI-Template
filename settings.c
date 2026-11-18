@@ -266,11 +266,33 @@ bool app_settings_load(app_settings *settings, const char *override) {
         applied = true;
     }
 
+    yyjson_val *keybindings = yyjson_obj_get(root, "keybindings");
     for (size_t i = 0; i < sizeof loaded.keybindings / sizeof loaded.keybindings[0]; ++i) {
         cui_key key = CUI_KEY_NONE;
         int mods = 0;
-        if (parse_key(yyjson_obj_get(root, loaded.keybindings[i].key_name), &key) &&
-            parse_mods(yyjson_obj_get(root, loaded.keybindings[i].mods_name), &mods) &&
+        yyjson_val *entry = yyjson_is_obj(keybindings)
+            ? yyjson_obj_get(keybindings, loaded.keybindings[i].id)
+            : NULL;
+        if (entry) {
+            if (yyjson_is_obj(entry)) {
+                yyjson_val *mods_val = yyjson_obj_get(entry, "mods");
+                bool mods_ok = mods_val ? parse_mods(mods_val, &mods) : true;
+                if (parse_key(yyjson_obj_get(entry, "key"), &key) && mods_ok &&
+                    (key != CUI_KEY_NONE || mods == 0)) {
+                    loaded.keybindings[i].combo = (cui_key_combo){ mods, key };
+                    applied = true;
+                }
+            }
+            continue;
+        }
+        /* Legacy flat "<id>_key" / "<id>_mods" format remains readable. */
+        char key_name[64], mods_name[64];
+        int kn = snprintf(key_name, sizeof key_name, "%s_key", loaded.keybindings[i].id);
+        int mn = snprintf(mods_name, sizeof mods_name, "%s_mods", loaded.keybindings[i].id);
+        if (kn > 0 && (size_t)kn < sizeof key_name &&
+            mn > 0 && (size_t)mn < sizeof mods_name &&
+            parse_key(yyjson_obj_get(root, key_name), &key) &&
+            parse_mods(yyjson_obj_get(root, mods_name), &mods) &&
             (key != CUI_KEY_NONE || mods == 0)) {
             loaded.keybindings[i].combo = (cui_key_combo){ mods, key };
             applied = true;
@@ -291,12 +313,17 @@ bool app_settings_save(const app_settings *settings, const char *override) {
     yyjson_mut_doc_set_root(doc, root);
     bool ok = root && yyjson_mut_obj_add_str(doc, root, "example_string", settings->example_string) &&
         yyjson_mut_obj_add_real(doc, root, "example_number", settings->example_number);
+    yyjson_mut_val *keybindings = ok ? yyjson_mut_obj(doc) : NULL;
+    ok = ok && keybindings && yyjson_mut_obj_add_val(doc, root, "keybindings", keybindings);
     for (size_t i = 0; ok && i < sizeof settings->keybindings / sizeof settings->keybindings[0]; ++i) {
         cui_key_combo combo = settings->keybindings[i].combo;
         char mods_buf[32];
         format_mods(combo.mods, mods_buf, sizeof mods_buf);
-        ok = yyjson_mut_obj_add_str(doc, root, settings->keybindings[i].key_name, cui_key_name(combo.key)) &&
-             yyjson_mut_obj_add_strcpy(doc, root, settings->keybindings[i].mods_name, mods_buf);
+        yyjson_mut_val *entry = yyjson_mut_obj(doc);
+        ok = entry &&
+             yyjson_mut_obj_add_str(doc, entry, "key", cui_key_name(combo.key)) &&
+             yyjson_mut_obj_add_strcpy(doc, entry, "mods", mods_buf) &&
+             yyjson_mut_obj_add_val(doc, keybindings, settings->keybindings[i].id, entry);
     }
     bool saved = ok && write_settings(path, doc);
     yyjson_mut_doc_free(doc);

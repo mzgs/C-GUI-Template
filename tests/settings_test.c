@@ -176,10 +176,13 @@ static void check_keybinding_edit(cui_theme_mode theme) {
     press_key(ui, CUI_KEY_K, CUI_MOD_PRIMARY | CUI_MOD_SHIFT);
     assert(settings.keybindings[1].combo.key == CUI_KEY_K);
 
-    /* Keybindings are stored as stable key/modifier names, not raw enum integers. */
+    /* Keybindings are stored under a "keybindings" object using stable key/modifier names. */
     char json[1024];
     read_text_file(test_settings_path, json, sizeof json);
-    assert(strstr(json, "\"save_key\": \"K\"") != NULL);
+    assert(strstr(json, "\"keybindings\": {") != NULL);
+    assert(strstr(json, "\"save\": {") != NULL);
+    assert(strstr(json, "\"key\": \"K\"") != NULL);
+    assert(strstr(json, "\"save_key\"") == NULL);
 
     app_settings reloaded = original;
     app_settings_load(&reloaded, test_settings_path);
@@ -211,8 +214,8 @@ static void check_load_validation_and_compat(const char *path) {
     app_settings original = settings;
     write_text_file(path,
         "{\"example_number\":true,\"example_string\":\"Loaded\","
-        "\"find_key\":\"NotAKey\",\"find_mods\":\"ctrl\","
-        "\"save_key\":-1,\"save_mods\":0}");
+        "\"keybindings\":{\"find\":{\"key\":\"NotAKey\",\"mods\":\"ctrl\"},"
+        "\"save\":{\"key\":-1,\"mods\":0}}}");
     app_settings loaded = original;
     assert(app_settings_load(&loaded, path));
     assert(loaded.example_number == 42);
@@ -220,7 +223,18 @@ static void check_load_validation_and_compat(const char *path) {
     assert(loaded.keybindings[0].combo.key == CUI_KEY_F);
     assert(loaded.keybindings[1].combo.key == CUI_KEY_S);
 
-    /* Legacy numeric keybinding format remains readable. */
+    /* Nested keybindings object (including optional omitted mods) loads cleanly. */
+    write_text_file(path,
+        "{\"keybindings\":{\"find\":{\"key\":\"H\"},"
+        "\"save\":{\"key\":\"L\",\"mods\":\"ctrl alt\"}}}");
+    loaded = original;
+    assert(app_settings_load(&loaded, path));
+    assert(loaded.keybindings[0].combo.key == CUI_KEY_H);
+    assert(loaded.keybindings[0].combo.mods == 0);
+    assert(loaded.keybindings[1].combo.key == CUI_KEY_L);
+    assert(loaded.keybindings[1].combo.mods == (CUI_MOD_CTRL | CUI_MOD_ALT));
+
+    /* Legacy flat and numeric keybinding formats remain readable. */
     char legacy[256];
     snprintf(legacy, sizeof legacy,
              "{\"find_key\":%d,\"find_mods\":%d,\"save_key\":\"J\",\"save_mods\":\"ctrl alt\"}",

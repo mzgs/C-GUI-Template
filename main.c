@@ -24,8 +24,8 @@ static app_settings settings = {
     .example_string = "Example",
     .example_number = 42,
     .keybindings = {
-        { "Find", "find_key", "find_mods", { CUI_MOD_PRIMARY, CUI_KEY_F } },
-        { "Save", "save_key", "save_mods", { CUI_MOD_PRIMARY, CUI_KEY_S } },
+        { "Find", "find", { CUI_MOD_PRIMARY, CUI_KEY_F } },
+        { "Save", "save", { CUI_MOD_PRIMARY, CUI_KEY_S } },
     },
 };
 

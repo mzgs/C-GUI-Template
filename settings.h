@@ -10,8 +10,7 @@ typedef struct {
     double example_number;
     struct {
         const char *action;
-        const char *key_name;
-        const char *mods_name;
+        const char *id;
         cui_key_combo combo;
     } keybindings[2];
 } app_settings;
