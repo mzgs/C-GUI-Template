@@ -9,6 +9,8 @@
 
 static bool settings_open;
 static int settings_section;
+static char example_string[128] = "Example";
+static double example_number = 42;
 static char keybinding_filter[128];
 static struct {
     const char *action;
@@ -57,15 +59,22 @@ static void frame(cui_ctx *ui, void *user) {
                 cui_scroll(ui, .id = "settings-page", .width = CUI_FILL) {
                     cui_column(ui, .height = CUI_FILL, .gap = 12) {
                         cui_heading(ui, sections[settings_section], 4);
-                        if (settings_section == 0)
-                            cui_secondary(ui, "No general settings available yet.");
-                        else if (settings_section == 1) {
+                        if (settings_section == 0) {
+                            cui_row(ui, .gap = 16) {
+                                cui_text(ui, "Example string", .font = CUI_FONT_MEDIUM, .width = CUI_PX(168));
+                                cui_input(ui, "example-string", example_string, sizeof example_string,
+                                          .width = CUI_FILL);
+                            }
+                            cui_row(ui, .gap = 16) {
+                                cui_text(ui, "Example number (0–100)", .font = CUI_FONT_MEDIUM, .width = CUI_PX(168));
+                                cui_number(ui, "example-number", &example_number, 0, 100, .width = CUI_FILL);
+                            }
+                        } else if (settings_section == 1) {
                             cui_table_column columns[] = {
                                 { "Action", CUI_FILL, CUI_TEXT_LEFT, false },
                                 { "Keys", CUI_PX(240), CUI_TEXT_LEFT, false },
                             };
                             cui_secondary(ui, "Click a shortcut, then press a key combination. Backspace clears.");
-                            cui_secondary(ui, "Examples only. Edits last until the app closes.");
                             cui_search(ui, "keybinding-filter", keybinding_filter, sizeof keybinding_filter,
                                        .placeholder = "Filter actions or keys...", .width = CUI_FILL);
                             int visible = 0;
