@@ -3,7 +3,14 @@
 
 #include <stdbool.h>
 
-/* Call from frame() after CUI creates the menu; settings_open must outlive the app. */
-void app_menu_install(bool *settings_open);
+typedef struct {
+    bool *settings_open;
+    int *settings_section;
+    int about_section;
+    bool *palette_open;
+} app_menu_hooks;
+
+/* Call from frame() after CUI creates the menu; referenced state must outlive the app. */
+void app_menu_install(const app_menu_hooks *hooks);
 
 #endif

@@ -19,7 +19,7 @@ or dependencies.
 
 ## CUI conventions
 
-- Keep `int main(void)` and the `cui_app_run` callback setup in `main.c`.
+- Keep `int main(int argc, char **argv)` and the `cui_app_run` callback setup in `main.c`.
   CUI owns window creation, the event loop, rendering, and cleanup.
 - Describe the UI inside `frame()` every frame. Store persistent application
   state outside its automatic local variables, using static state or the

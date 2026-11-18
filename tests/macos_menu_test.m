@@ -7,6 +7,7 @@
 #include <string.h>
 
 bool macos_settings_path(char *path, size_t capacity);
+int macos_system_dark(void);
 
 @interface MenuProbe : NSObject
 @property(nonatomic, assign) bool triggered;
@@ -31,17 +32,40 @@ int main(void) {
         assert(resolved_len >= suffix_len &&
                strcmp(resolved + resolved_len - suffix_len, expected_suffix) == 0);
 
+        int sys_dark = macos_system_dark();
+        assert(sys_dark == 0 || sys_dark == 1);
+
         cui_app *app = cui_app_create(&(cui_app_desc){ .hidden = true });
         assert(app);
         assert(cui_app_frame(app));
         frame(cui_app_ui(app), NULL);
         NSMenu *menu = NSApp.mainMenu.itemArray.firstObject.submenu;
         NSInteger count = menu.numberOfItems;
-        app_menu_install(&settings_open);
+        app_menu_install(&(app_menu_hooks){
+            .settings_open = &settings_open,
+            .settings_section = &settings_section,
+            .about_section = SETTINGS_SECTION_ABOUT,
+            .palette_open = &palette_open,
+        });
         assert(menu.numberOfItems == count);
-        assert([[menu itemAtIndex:0].title isEqualToString:@"Settings…"]);
+
+        /* Index 0 is About <APP_NAME>, index 2 is Settings… */
+        assert([[menu itemAtIndex:0].title isEqualToString:@"About " APP_NAME]);
+        assert([[menu itemAtIndex:2].title isEqualToString:@"Settings…"]);
+
+        settings_open = false;
+        settings_section = SETTINGS_SECTION_GENERAL;
+        palette_open = true;
         [menu performActionForItemAtIndex:0];
         assert(settings_open);
+        assert(settings_section == SETTINGS_SECTION_ABOUT);
+        assert(!palette_open);
+
+        settings_open = false;
+        settings_section = SETTINGS_SECTION_GENERAL;
+        [menu performActionForItemAtIndex:2];
+        assert(settings_open);
+        assert(settings_section == SETTINGS_SECTION_GENERAL);
 
         settings_open = false;
         NSEvent *shortcut = [NSEvent keyEventWithType:NSEventTypeKeyDown
@@ -53,7 +77,7 @@ int main(void) {
 
         /* Probe the menu item action instead of a second local event monitor,
          * since AppKit does not guarantee invocation order across monitors. */
-        NSMenuItem *settings_item = [menu itemAtIndex:0];
+        NSMenuItem *settings_item = [menu itemAtIndex:2];
         id orig_target = settings_item.target;
         SEL orig_action = settings_item.action;
         MenuProbe *probe = [[MenuProbe alloc] init];

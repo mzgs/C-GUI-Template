@@ -23,7 +23,7 @@ endif()
 add_library(app_settings STATIC settings.c)
 target_link_libraries(app_settings PRIVATE cui::cui yyjson)
 if(WIN32)
-    target_link_libraries(app_settings PRIVATE uuid shell32 ole32)
+    target_link_libraries(app_settings PRIVATE uuid shell32 ole32 advapi32)
 endif()
 
 add_executable(empty_gui MACOSX_BUNDLE main.c)

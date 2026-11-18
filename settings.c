@@ -4,6 +4,7 @@
 
 #include "settings.h"
 #include <yyjson.h>
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
@@ -31,6 +32,7 @@ enum { SETTINGS_PATH_CAP = PATH_MAX };
 
 #ifdef __APPLE__
 bool macos_settings_path(char *path, size_t capacity);
+int macos_system_dark(void);
 #endif
 
 static bool settings_path(path_char *path, const char *override) {
@@ -102,29 +104,102 @@ static bool create_directories(char *path) {
 }
 #endif
 
-static bool write_settings(const path_char *path, yyjson_mut_doc *doc) {
-    path_char temp[SETTINGS_PATH_CAP];
+static bool parent_directory(const path_char *path, path_char *dir, bool create) {
 #ifdef _WIN32
-    wchar_t dir[SETTINGS_PATH_CAP];
     wcscpy(dir, path);
     wchar_t *slash = wcsrchr(dir, L'\\');
     if (!slash) {
         wcscpy(dir, L".");
-    } else {
-        if (slash == dir || (slash == dir + 2 && dir[1] == L':')) slash[1] = L'\0';
-        else *slash = L'\0';
-        if (!create_directories(dir)) return false;
+        return true;
     }
+    if (slash == dir || (slash == dir + 2 && dir[1] == L':')) slash[1] = L'\0';
+    else *slash = L'\0';
+    return !create || create_directories(dir);
+#else
+    strcpy(dir, path);
+    char *slash = strrchr(dir, '/');
+    if (!slash) {
+        strcpy(dir, ".");
+        return true;
+    }
+    if (slash == dir) slash[1] = '\0';
+    else *slash = '\0';
+    return !create || (strcmp(dir, "/") == 0) || create_directories(dir);
+#endif
+}
+
+bool app_settings_dir(char *out, size_t capacity, const char *override, bool create) {
+    if (!out || capacity == 0) return false;
+    out[0] = '\0';
+    path_char path[SETTINGS_PATH_CAP];
+    path_char dir[SETTINGS_PATH_CAP];
+    if (!settings_path(path, override) || !parent_directory(path, dir, create)) return false;
+#ifdef _WIN32
+    int len = WideCharToMultiByte(CP_UTF8, 0, dir, -1, out, (int)capacity, NULL, NULL);
+    return len > 0 && (size_t)len <= capacity;
+#else
+    int len = snprintf(out, capacity, "%s", dir);
+    return len >= 0 && (size_t)len < capacity;
+#endif
+}
+
+int app_system_dark(void) {
+#ifdef __APPLE__
+    return macos_system_dark();
+#elif defined(_WIN32)
+    HKEY key;
+    DWORD value = 1, size = sizeof value;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                      0, KEY_READ, &key) != ERROR_SUCCESS)
+        return -1;
+    LONG r = RegQueryValueExW(key, L"AppsUseLightTheme", NULL, NULL, (LPBYTE)&value, &size);
+    RegCloseKey(key);
+    if (r != ERROR_SUCCESS) return -1;
+    return value == 0 ? 1 : 0;
+#else
+    const char *gtk = getenv("GTK_THEME");
+    if (!gtk) return -1;
+    for (const char *p = gtk; *p; ++p) {
+        if (tolower((unsigned char)p[0]) == 'd' &&
+            tolower((unsigned char)p[1]) == 'a' &&
+            tolower((unsigned char)p[2]) == 'r' &&
+            tolower((unsigned char)p[3]) == 'k')
+            return 1;
+    }
+    return -1;
+#endif
+}
+
+bool app_action_pressed(cui_ctx *ui, const app_settings *settings, app_action action) {
+    if (!ui || !settings || action < 0 || action >= APP_ACTION_COUNT) return false;
+    if (cui_wants_keyboard(ui)) return false;
+    cui_key_combo combo = settings->keybindings[action].combo;
+    return combo.key != CUI_KEY_NONE && cui_shortcut(ui, combo.mods, combo.key);
+}
+
+int app_keybinding_conflict(const app_settings *settings, app_action action) {
+    if (!settings || action < 0 || action >= APP_ACTION_COUNT) return APP_CONFLICT_NONE;
+    cui_key_combo combo = settings->keybindings[action].combo;
+    if (combo.key == CUI_KEY_NONE) return APP_CONFLICT_NONE;
+    if (combo.key == CUI_KEY_COMMA && combo.mods == CUI_MOD_PRIMARY)
+        return APP_CONFLICT_SETTINGS;
+    for (int i = 0; i < APP_ACTION_COUNT; ++i) {
+        if (i == (int)action) continue;
+        cui_key_combo other = settings->keybindings[i].combo;
+        if (other.key == combo.key && other.mods == combo.mods) return i;
+    }
+    return APP_CONFLICT_NONE;
+}
+
+static bool write_settings(const path_char *path, yyjson_mut_doc *doc) {
+    path_char temp[SETTINGS_PATH_CAP];
+    path_char dir[SETTINGS_PATH_CAP];
+    if (!parent_directory(path, dir, true)) return false;
+#ifdef _WIN32
     if (!GetTempFileNameW(dir, L"cfg", 0, temp)) return false;
     FILE *file = _wfopen(temp, L"wb");
 #else
-    char dir[SETTINGS_PATH_CAP];
-    strcpy(dir, path);
-    char *slash = strrchr(dir, '/');
-    if (slash && slash != dir) {
-        *slash = '\0';
-        if (!create_directories(dir)) return false;
-    }
     int len = snprintf(temp, sizeof temp, "%s.XXXXXX", path);
     if (len < 0 || (size_t)len >= sizeof temp) return false;
     int fd = mkstemp(temp);
@@ -154,8 +229,51 @@ static const struct {
     { CUI_MOD_SUPER, "super" },
 };
 
+static const char *const theme_names[APP_THEME_COUNT] = {
+    "system",
+    "light",
+    "dark",
+};
+
 static double json_number(yyjson_val *value) {
     return yyjson_is_num(value) ? yyjson_get_num(value) : NAN;
+}
+
+static bool str_eq_ignore_case(const char *a, const char *b) {
+    while (*a && *b) {
+        if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return false;
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+
+static bool parse_theme_mode(yyjson_val *value, app_theme_mode *out) {
+    if (!yyjson_is_str(value)) return false;
+    const char *text = yyjson_get_str(value);
+    size_t len = yyjson_get_len(value);
+    if (!text || memchr(text, '\0', len)) return false;
+    for (int i = 0; i < APP_THEME_COUNT; ++i) {
+        if (str_eq_ignore_case(text, theme_names[i])) {
+            *out = (app_theme_mode)i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool parse_accent(yyjson_val *value, cui_accent *out) {
+    if (!yyjson_is_str(value)) return false;
+    const char *text = yyjson_get_str(value);
+    size_t len = yyjson_get_len(value);
+    if (!text || memchr(text, '\0', len)) return false;
+    for (int i = 0; i < CUI_ACCENT_COUNT; ++i) {
+        if (str_eq_ignore_case(text, cui_accent_name((cui_accent)i))) {
+            *out = (cui_accent)i;
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool parse_key(yyjson_val *value, cui_key *out) {
@@ -266,6 +384,51 @@ bool app_settings_load(app_settings *settings, const char *override) {
         applied = true;
     }
 
+    yyjson_val *appearance = yyjson_obj_get(root, "appearance");
+    if (yyjson_is_obj(appearance)) {
+        app_theme_mode mode = loaded.theme_mode;
+        if (parse_theme_mode(yyjson_obj_get(appearance, "theme"), &mode)) {
+            loaded.theme_mode = mode;
+            applied = true;
+        }
+        cui_accent accent = loaded.accent;
+        if (parse_accent(yyjson_obj_get(appearance, "accent"), &accent)) {
+            loaded.accent = accent;
+            applied = true;
+        }
+        double scale = json_number(yyjson_obj_get(appearance, "font_scale"));
+        if (isfinite(scale) && scale >= FONT_SCALE_MIN - 1e-4 && scale <= FONT_SCALE_MAX + 1e-4) {
+            if (scale < FONT_SCALE_MIN) scale = FONT_SCALE_MIN;
+            if (scale > FONT_SCALE_MAX) scale = FONT_SCALE_MAX;
+            loaded.font_scale = (float)scale;
+            applied = true;
+        }
+        yyjson_val *reduced = yyjson_obj_get(appearance, "reduced_motion");
+        if (yyjson_is_bool(reduced)) {
+            loaded.reduced_motion = yyjson_get_bool(reduced);
+            applied = true;
+        }
+    }
+
+    yyjson_val *window = yyjson_obj_get(root, "window");
+    if (yyjson_is_obj(window)) {
+        double width = json_number(yyjson_obj_get(window, "width"));
+        if (width >= WINDOW_WIDTH_MIN && width <= WINDOW_WIDTH_MAX && width == floor(width)) {
+            loaded.window_width = (int)width;
+            applied = true;
+        }
+        double height = json_number(yyjson_obj_get(window, "height"));
+        if (height >= WINDOW_HEIGHT_MIN && height <= WINDOW_HEIGHT_MAX && height == floor(height)) {
+            loaded.window_height = (int)height;
+            applied = true;
+        }
+        yyjson_val *fullscreen = yyjson_obj_get(window, "fullscreen");
+        if (yyjson_is_bool(fullscreen)) {
+            loaded.window_fullscreen = yyjson_get_bool(fullscreen);
+            applied = true;
+        }
+    }
+
     yyjson_val *keybindings = yyjson_obj_get(root, "keybindings");
     for (size_t i = 0; i < sizeof loaded.keybindings / sizeof loaded.keybindings[0]; ++i) {
         cui_key key = CUI_KEY_NONE;
@@ -311,8 +474,27 @@ bool app_settings_save(const app_settings *settings, const char *override) {
     if (!doc) return false;
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
-    bool ok = root && yyjson_mut_obj_add_str(doc, root, "example_string", settings->example_string) &&
+    bool ok = root &&
+        yyjson_mut_obj_add_str(doc, root, "example_string", settings->example_string) &&
         yyjson_mut_obj_add_real(doc, root, "example_number", settings->example_number);
+
+    const char *theme_name = (settings->theme_mode >= 0 && settings->theme_mode < APP_THEME_COUNT)
+        ? theme_names[settings->theme_mode] : theme_names[APP_THEME_SYSTEM];
+    yyjson_mut_val *appearance = ok ? yyjson_mut_obj(doc) : NULL;
+    ok = ok && appearance &&
+        yyjson_mut_obj_add_str(doc, appearance, "theme", theme_name) &&
+        yyjson_mut_obj_add_str(doc, appearance, "accent", cui_accent_name(settings->accent)) &&
+        yyjson_mut_obj_add_real(doc, appearance, "font_scale", round((double)settings->font_scale * 100.0) / 100.0) &&
+        yyjson_mut_obj_add_bool(doc, appearance, "reduced_motion", settings->reduced_motion) &&
+        yyjson_mut_obj_add_val(doc, root, "appearance", appearance);
+
+    yyjson_mut_val *window = ok ? yyjson_mut_obj(doc) : NULL;
+    ok = ok && window &&
+        yyjson_mut_obj_add_int(doc, window, "width", settings->window_width) &&
+        yyjson_mut_obj_add_int(doc, window, "height", settings->window_height) &&
+        yyjson_mut_obj_add_bool(doc, window, "fullscreen", settings->window_fullscreen) &&
+        yyjson_mut_obj_add_val(doc, root, "window", window);
+
     yyjson_mut_val *keybindings = ok ? yyjson_mut_obj(doc) : NULL;
     ok = ok && keybindings && yyjson_mut_obj_add_val(doc, root, "keybindings", keybindings);
     for (size_t i = 0; ok && i < sizeof settings->keybindings / sizeof settings->keybindings[0]; ++i) {
