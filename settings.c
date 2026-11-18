@@ -28,11 +28,21 @@ enum { SETTINGS_PATH_CAP = MAX_PATH };
 #include <unistd.h>
 typedef char path_char;
 enum { SETTINGS_PATH_CAP = PATH_MAX };
+#if !defined(__APPLE__) && defined(__has_include)
+#if __has_include(<X11/Xlib.h>) && __has_include(<X11/Xatom.h>)
+#define APP_HAVE_X11 1
+#include <X11/Xlib.h>
+#include <X11/Xatom.h>
+#endif
+#endif
 #endif
 
 #ifdef __APPLE__
 bool macos_settings_path(char *path, size_t capacity);
 int macos_system_dark(void);
+bool macos_window_get_pos(void *native_window, int *x, int *y);
+bool macos_window_set_pos(void *native_window, int x, int y);
+void macos_window_center(void *native_window);
 #endif
 
 static bool settings_path(path_char *path, const char *override) {
@@ -168,6 +178,148 @@ int app_system_dark(void) {
             return 1;
     }
     return -1;
+#endif
+}
+
+#ifdef APP_HAVE_X11
+static Display *x11_display(void) {
+    static Display *dpy;
+    static bool tried;
+    if (!tried) {
+        tried = true;
+        dpy = XOpenDisplay(NULL);
+    }
+    return dpy;
+}
+
+static void x11_frame_extents(Display *dpy, Window win, int *left, int *top) {
+    *left = 0;
+    *top = 0;
+    Atom prop = XInternAtom(dpy, "_NET_FRAME_EXTENTS", True);
+    if (!prop) return;
+    Atom actual_type = 0;
+    int actual_format = 0;
+    unsigned long nitems = 0, bytes_after = 0;
+    unsigned char *data = NULL;
+    if (XGetWindowProperty(dpy, win, prop, 0, 4, False, XA_CARDINAL,
+                           &actual_type, &actual_format, &nitems, &bytes_after, &data) == Success && data) {
+        if (actual_format == 32 && nitems >= 4) {
+            long *extents = (long *)data;
+            *left = (int)extents[0];
+            *top = (int)extents[2];
+        }
+        XFree(data);
+    }
+}
+#endif
+
+bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y) {
+    if (!native_window || !backend || !x || !y) return false;
+#ifdef __APPLE__
+    if (strcmp(backend, "cocoa") == 0) return macos_window_get_pos(native_window, x, y);
+#elif defined(_WIN32)
+    if (strcmp(backend, "win32") == 0) {
+        RECT r;
+        if (!GetWindowRect((HWND)native_window, &r)) return false;
+        *x = (int)r.left;
+        *y = (int)r.top;
+        return true;
+    }
+#elif defined(APP_HAVE_X11)
+    if (strcmp(backend, "x11") == 0) {
+        Display *dpy = x11_display();
+        if (!dpy) return false;
+        Window win = (Window)(uintptr_t)native_window;
+        XWindowAttributes attr;
+        Window child = 0;
+        int rx = 0, ry = 0;
+        if (!XGetWindowAttributes(dpy, win, &attr) || !attr.root) return false;
+        if (!XTranslateCoordinates(dpy, win, attr.root, 0, 0, &rx, &ry, &child)) return false;
+        int left = 0, top = 0;
+        x11_frame_extents(dpy, win, &left, &top);
+        *x = rx - left;
+        *y = ry - top;
+        return true;
+    }
+#endif
+    return false;
+}
+
+bool app_window_set_pos(void *native_window, const char *backend, int x, int y) {
+    if (!native_window || !backend) return false;
+    if (x < WINDOW_POS_MIN || x > WINDOW_POS_MAX || y < WINDOW_POS_MIN || y > WINDOW_POS_MAX)
+        return false;
+#ifdef __APPLE__
+    if (strcmp(backend, "cocoa") == 0) return macos_window_set_pos(native_window, x, y);
+#elif defined(_WIN32)
+    if (strcmp(backend, "win32") == 0) {
+        HWND hwnd = (HWND)native_window;
+        RECT cur;
+        if (!GetWindowRect(hwnd, &cur)) return false;
+        LONG w = cur.right - cur.left;
+        LONG h = cur.bottom - cur.top;
+        LONG bar_h = h < 32 ? h : 32;
+        RECT titlebar = { x, y, x + w, y + bar_h };
+        HMONITOR mon = MonitorFromRect(&titlebar, MONITOR_DEFAULTTONULL);
+        if (!mon) return false;
+        MONITORINFO mi = { .cbSize = sizeof mi };
+        if (!GetMonitorInfoW(mon, &mi)) return false;
+        RECT overlap;
+        if (!IntersectRect(&overlap, &titlebar, &mi.rcWork) ||
+            (overlap.right - overlap.left) < 64 || (overlap.bottom - overlap.top) < 16)
+            return false;
+        return SetWindowPos(hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) != 0;
+    }
+#elif defined(APP_HAVE_X11)
+    if (strcmp(backend, "x11") == 0) {
+        Display *dpy = x11_display();
+        if (!dpy) return false;
+        Window win = (Window)(uintptr_t)native_window;
+        XWindowAttributes attr;
+        if (!XGetWindowAttributes(dpy, win, &attr)) return false;
+        int scr = DefaultScreen(dpy);
+        int sw = DisplayWidth(dpy, scr);
+        int sh = DisplayHeight(dpy, scr);
+        if (x + attr.width < 64 || x > sw - 64 || y < 0 || y > sh - 48) return false;
+        XMoveWindow(dpy, win, x, y);
+        XFlush(dpy);
+        return true;
+    }
+#endif
+    return false;
+}
+
+void app_window_center(void *native_window, const char *backend) {
+    if (!native_window || !backend) return;
+#ifdef __APPLE__
+    if (strcmp(backend, "cocoa") == 0) macos_window_center(native_window);
+#elif defined(_WIN32)
+    if (strcmp(backend, "win32") == 0) {
+        HWND hwnd = (HWND)native_window;
+        RECT r;
+        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi = { .cbSize = sizeof mi };
+        if (GetWindowRect(hwnd, &r) && mon && GetMonitorInfoW(mon, &mi)) {
+            int w = r.right - r.left;
+            int h = r.bottom - r.top;
+            int cx = mi.rcWork.left + ((mi.rcWork.right - mi.rcWork.left) - w) / 2;
+            int cy = mi.rcWork.top + ((mi.rcWork.bottom - mi.rcWork.top) - h) / 2;
+            SetWindowPos(hwnd, NULL, cx, cy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
+#elif defined(APP_HAVE_X11)
+    if (strcmp(backend, "x11") == 0) {
+        Display *dpy = x11_display();
+        if (!dpy) return;
+        Window win = (Window)(uintptr_t)native_window;
+        XWindowAttributes attr;
+        if (!XGetWindowAttributes(dpy, win, &attr)) return;
+        int scr = DefaultScreen(dpy);
+        int cx = (DisplayWidth(dpy, scr) - attr.width) / 2;
+        int cy = (DisplayHeight(dpy, scr) - attr.height) / 2;
+        XMoveWindow(dpy, win, cx > 0 ? cx : 0, cy > 0 ? cy : 0);
+        XFlush(dpy);
+    }
 #endif
 }
 
@@ -412,6 +564,15 @@ bool app_settings_load(app_settings *settings, const char *override) {
 
     yyjson_val *window = yyjson_obj_get(root, "window");
     if (yyjson_is_obj(window)) {
+        double wx = json_number(yyjson_obj_get(window, "x"));
+        double wy = json_number(yyjson_obj_get(window, "y"));
+        if (wx >= WINDOW_POS_MIN && wx <= WINDOW_POS_MAX && wx == floor(wx) &&
+            wy >= WINDOW_POS_MIN && wy <= WINDOW_POS_MAX && wy == floor(wy)) {
+            loaded.window_has_pos = true;
+            loaded.window_x = (int)wx;
+            loaded.window_y = (int)wy;
+            applied = true;
+        }
         double width = json_number(yyjson_obj_get(window, "width"));
         if (width >= WINDOW_WIDTH_MIN && width <= WINDOW_WIDTH_MAX && width == floor(width)) {
             loaded.window_width = (int)width;
@@ -489,7 +650,12 @@ bool app_settings_save(const app_settings *settings, const char *override) {
         yyjson_mut_obj_add_val(doc, root, "appearance", appearance);
 
     yyjson_mut_val *window = ok ? yyjson_mut_obj(doc) : NULL;
-    ok = ok && window &&
+    ok = ok && window;
+    if (ok && settings->window_has_pos) {
+        ok = yyjson_mut_obj_add_int(doc, window, "x", settings->window_x) &&
+             yyjson_mut_obj_add_int(doc, window, "y", settings->window_y);
+    }
+    ok = ok &&
         yyjson_mut_obj_add_int(doc, window, "width", settings->window_width) &&
         yyjson_mut_obj_add_int(doc, window, "height", settings->window_height) &&
         yyjson_mut_obj_add_bool(doc, window, "fullscreen", settings->window_fullscreen) &&

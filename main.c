@@ -39,6 +39,10 @@ static bool window_dirty;
 static double window_dirty_since;
 static bool window_fullscreen_pending;
 static double window_fullscreen_since;
+static bool observed_window_has_pos;
+static int observed_window_x;
+static int observed_window_y;
+static const char *active_settings_path;
 static cui_ctx *window_state_ui;
 static cui_ctx *appearance_ui;
 static bool appearance_force_motion;
@@ -64,6 +68,9 @@ static int (*settings_system_dark)(void) = app_system_dark;
     .accent = CUI_ACCENT_NEUTRAL, \
     .font_scale = 1.0f, \
     .reduced_motion = false, \
+    .window_has_pos = false, \
+    .window_x = 0, \
+    .window_y = 0, \
     .window_width = 900, \
     .window_height = 600, \
     .window_fullscreen = false, \
@@ -154,11 +161,69 @@ static void apply_appearance(cui_ctx *ui) {
     }
 }
 
+static void capture_live_window_bounds(void) {
+    if (!cui_app_ui(NULL) || window_fullscreen_pending) return;
+    bool fs = cui_app_is_fullscreen(NULL);
+    if (fs != settings.window_fullscreen) {
+        settings.window_fullscreen = fs;
+        window_dirty = true;
+    }
+    if (fs) return;
+    cui_vec2 win = cui_app_size(NULL);
+    int w = (int)lroundf(win.x);
+    int h = (int)lroundf(win.y);
+    if (w >= WINDOW_WIDTH_MIN && w <= WINDOW_WIDTH_MAX &&
+        h >= WINDOW_HEIGHT_MIN && h <= WINDOW_HEIGHT_MAX &&
+        (w != settings.window_width || h != settings.window_height)) {
+        settings.window_width = w;
+        settings.window_height = h;
+        window_dirty = true;
+    }
+    int x = 0, y = 0;
+    if (app_window_get_pos(cui_app_native_window(NULL), cui_app_backend(NULL), &x, &y)) {
+        if (!observed_window_has_pos) {
+            observed_window_has_pos = true;
+            observed_window_x = x;
+            observed_window_y = y;
+        } else if (x != observed_window_x || y != observed_window_y) {
+            observed_window_x = x;
+            observed_window_y = y;
+            if (!settings.window_has_pos || x != settings.window_x || y != settings.window_y) {
+                settings.window_has_pos = true;
+                settings.window_x = x;
+                settings.window_y = y;
+                window_dirty = true;
+            }
+        }
+    }
+}
+
+#ifdef __APPLE__
+static void on_will_terminate(void) {
+    capture_live_window_bounds();
+    if (settings_dirty || window_dirty) {
+        app_settings_save(&settings, active_settings_path);
+        settings_dirty = false;
+        window_dirty = false;
+    }
+}
+#endif
+
 static void sync_window_state(cui_ctx *ui, const char *settings_path) {
     if (cui_app_ui(NULL) != ui) return;
+    active_settings_path = settings_path;
     if (window_state_ui != ui) {
         window_state_ui = ui;
         window_fullscreen_pending = false;
+        void *native = cui_app_native_window(NULL);
+        const char *backend = cui_app_backend(NULL);
+        if (settings.window_has_pos) {
+            app_window_set_pos(native, backend, settings.window_x, settings.window_y);
+        }
+        int x = 0, y = 0;
+        observed_window_has_pos = app_window_get_pos(native, backend, &x, &y);
+        observed_window_x = x;
+        observed_window_y = y;
         if (settings.window_fullscreen) {
             cui_app_set_fullscreen(NULL, true);
             window_fullscreen_pending = true;
@@ -171,23 +236,16 @@ static void sync_window_state(cui_ctx *ui, const char *settings_path) {
             window_fullscreen_pending = false;
     }
     if (!window_fullscreen_pending) {
-        if (fs != settings.window_fullscreen) {
-            settings.window_fullscreen = fs;
-            window_dirty = true;
+        bool was_dirty = window_dirty;
+        int prev_w = settings.window_width, prev_h = settings.window_height;
+        int prev_x = settings.window_x, prev_y = settings.window_y;
+        bool prev_has_pos = settings.window_has_pos, prev_fs = settings.window_fullscreen;
+        capture_live_window_bounds();
+        if (window_dirty && (!was_dirty ||
+                             settings.window_width != prev_w || settings.window_height != prev_h ||
+                             settings.window_x != prev_x || settings.window_y != prev_y ||
+                             settings.window_has_pos != prev_has_pos || settings.window_fullscreen != prev_fs)) {
             window_dirty_since = cui_time(ui);
-        }
-        if (!fs) {
-            cui_vec2 win = cui_app_size(NULL);
-            int w = (int)lroundf(win.x);
-            int h = (int)lroundf(win.y);
-            if (w >= WINDOW_WIDTH_MIN && w <= WINDOW_WIDTH_MAX &&
-                h >= WINDOW_HEIGHT_MIN && h <= WINDOW_HEIGHT_MAX &&
-                (w != settings.window_width || h != settings.window_height)) {
-                settings.window_width = w;
-                settings.window_height = h;
-                window_dirty = true;
-                window_dirty_since = cui_time(ui);
-            }
         }
     }
     if (window_dirty) {
@@ -301,6 +359,7 @@ static void frame(cui_ctx *ui, void *user) {
         .settings_section = &settings_section,
         .about_section = SETTINGS_SECTION_ABOUT,
         .palette_open = &palette_open,
+        .on_will_terminate = on_will_terminate,
     });
 #else
     cui_menu_bar(ui, "app-menu") {
@@ -467,6 +526,13 @@ static void frame(cui_ctx *ui, void *user) {
                                     if (cui_app_ui(NULL) == ui) {
                                         if (cui_app_is_fullscreen(NULL)) cui_app_set_fullscreen(NULL, false);
                                         cui_app_set_size(NULL, settings.window_width, settings.window_height);
+                                        void *native = cui_app_native_window(NULL);
+                                        const char *backend = cui_app_backend(NULL);
+                                        app_window_center(native, backend);
+                                        int x = 0, y = 0;
+                                        observed_window_has_pos = app_window_get_pos(native, backend, &x, &y);
+                                        observed_window_x = x;
+                                        observed_window_y = y;
                                     }
                                     settings_dirty = false;
                                     changed = false;

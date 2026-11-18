@@ -17,7 +17,7 @@ app without recompiling. A failed build stops the script before launch.
 
 - **Settings dialog**: On macOS, choose **C GUI Template → Settings…** (`⌘,`) or **About C GUI Template**. On Windows and Linux, use the top menu bar (**File → Settings…**, **Help → About**) or press **Ctrl+,**.
 - **Appearance preferences**: Persisted theme mode (**System**, **Light**, **Dark**), accent color, text scale (`85%`–`135%`), and **Reduce motion**.
-- **Window state persistence**: Restores the last non-fullscreen window size and fullscreen state across launches.
+- **Window state persistence**: Restores the last non-fullscreen window position (validated against active displays so windows never open off-screen), size, and fullscreen state across launches.
 - **Keybindings with dispatch & conflict warnings**: Filter by action or key combination (case-insensitive), click a shortcut to rebind, or press Backspace to clear. Duplicate bindings and conflicts with the reserved Settings shortcut are highlighted. Use `app_action_pressed()` to trigger actions from `frame()`.
 - **Command Palette**: Press **⌘K** on macOS or **Ctrl+K** on Windows/Linux (rebindable in Keybindings) to search navigation, theme switching, fullscreen, and app actions.
 - **Toast notifications & Settings file tools**: Import, export, reset (with confirmation), or reveal the settings folder directly from Settings or About.

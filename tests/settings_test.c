@@ -242,7 +242,10 @@ static void check_appearance_settings(void) {
     draw_settings(ui);
     assert(cui_theme_get(ui)->motion > 0.0f);
 
-    /* Save and reload appearance + window state. */
+    /* Save and reload appearance + window state (including negative multi-monitor pos). */
+    settings.window_has_pos = true;
+    settings.window_x = -240;
+    settings.window_y = 180;
     settings.window_width = 1120;
     settings.window_height = 740;
     settings.window_fullscreen = true;
@@ -253,6 +256,8 @@ static void check_appearance_settings(void) {
     assert(strstr(json, "\"theme\": \"dark\"") != NULL);
     assert(strstr(json, "\"accent\": \"blue\"") != NULL);
     assert(strstr(json, "\"window\": {") != NULL);
+    assert(strstr(json, "\"x\": -240") != NULL);
+    assert(strstr(json, "\"y\": 180") != NULL);
     assert(strstr(json, "\"width\": 1120") != NULL);
     assert(strstr(json, "\"fullscreen\": true") != NULL);
 
@@ -262,9 +267,22 @@ static void check_appearance_settings(void) {
     assert(reloaded.accent == CUI_ACCENT_BLUE);
     assert(fabsf(reloaded.font_scale - 1.15f) < 0.001f);
     assert(!reloaded.reduced_motion);
+    assert(reloaded.window_has_pos);
+    assert(reloaded.window_x == -240);
+    assert(reloaded.window_y == 180);
     assert(reloaded.window_width == 1120);
     assert(reloaded.window_height == 740);
     assert(reloaded.window_fullscreen);
+
+    /* When window_has_pos is false, x/y are omitted from JSON. */
+    settings.window_has_pos = false;
+    assert(app_settings_save(&settings, test_settings_path));
+    read_text_file(test_settings_path, json, sizeof json);
+    assert(strstr(json, "\"x\":") == NULL);
+    assert(strstr(json, "\"y\":") == NULL);
+    reloaded = default_settings;
+    assert(app_settings_load(&reloaded, test_settings_path));
+    assert(!reloaded.window_has_pos);
 
     cui_destroy(ui);
     reset_ui_state();
@@ -394,7 +412,7 @@ static void check_load_validation_and_compat(const char *path) {
     write_text_file(path,
         "{\"example_number\":true,\"example_string\":\"Loaded\","
         "\"appearance\":{\"theme\":\"nope\",\"accent\":\"ultraviolet\",\"font_scale\":9.0,\"reduced_motion\":123},"
-        "\"window\":{\"width\":100,\"height\":99999,\"fullscreen\":\"yes\"},"
+        "\"window\":{\"x\":999999,\"y\":10.5,\"width\":100,\"height\":99999,\"fullscreen\":\"yes\"},"
         "\"keybindings\":{\"find\":{\"key\":\"NotAKey\",\"mods\":\"ctrl\"},"
         "\"save\":{\"key\":-1,\"mods\":0}}}");
     app_settings loaded = original;
@@ -405,6 +423,7 @@ static void check_load_validation_and_compat(const char *path) {
     assert(loaded.accent == original.accent);
     assert(loaded.font_scale == original.font_scale);
     assert(loaded.reduced_motion == original.reduced_motion);
+    assert(!loaded.window_has_pos);
     assert(loaded.window_width == original.window_width);
     assert(loaded.window_height == original.window_height);
     assert(loaded.window_fullscreen == original.window_fullscreen);

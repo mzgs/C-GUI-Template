@@ -11,6 +11,8 @@ enum {
     WINDOW_WIDTH_MAX = 8192,
     WINDOW_HEIGHT_MIN = 280,
     WINDOW_HEIGHT_MAX = 8192,
+    WINDOW_POS_MIN = -32768,
+    WINDOW_POS_MAX = 32768,
     APP_CONFLICT_NONE = -1,
     APP_CONFLICT_SETTINGS = -2,
 };
@@ -39,6 +41,9 @@ typedef struct {
     cui_accent accent;
     float font_scale;
     bool reduced_motion;
+    bool window_has_pos;
+    int window_x;
+    int window_y;
     int window_width;
     int window_height;
     bool window_fullscreen;
@@ -56,6 +61,11 @@ bool app_settings_dir(char *out, size_t capacity, const char *path, bool create)
 
 /* Platform system theme: 1 dark, 0 light, -1 unknown. */
 int app_system_dark(void);
+
+/* Native window position helpers (backend is cui_app_backend(NULL)). */
+bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y);
+bool app_window_set_pos(void *native_window, const char *backend, int x, int y);
+void app_window_center(void *native_window, const char *backend);
 
 /* Keybinding dispatch and conflict detection. */
 bool app_action_pressed(cui_ctx *ui, const app_settings *settings, app_action action);

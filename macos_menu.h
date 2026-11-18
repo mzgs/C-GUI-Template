@@ -8,6 +8,7 @@ typedef struct {
     int *settings_section;
     int about_section;
     bool *palette_open;
+    void (*on_will_terminate)(void);
 } app_menu_hooks;
 
 /* Call from frame() after CUI creates the menu; referenced state must outlive the app. */

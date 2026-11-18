@@ -112,7 +112,58 @@ int main(void) {
         cui_input_key(cui_app_ui(app), CUI_KEY_ESCAPE, true, 0);
         frame(cui_app_ui(app), NULL);
         assert(!settings_open);
+
+        /* Window position save, off-screen rejection, and restore on macOS. */
+        const char *pos_path = "/tmp/c_gui_template_pos_test.json";
+        remove(pos_path);
+        NSScreen *screen = window.screen ?: [NSScreen mainScreen];
+        NSRect vis = screen ? screen.visibleFrame : NSMakeRect(0, 0, 1200, 800);
+        int target_x = (int)llround(vis.origin.x + 80.0);
+        int target_y = (int)llround(vis.origin.y + 80.0);
+        assert(app_window_set_pos((__bridge void *)window, "cocoa", target_x, target_y));
+        int got_x = 0, got_y = 0;
+        assert(app_window_get_pos((__bridge void *)window, "cocoa", &got_x, &got_y));
+        assert(got_x == target_x && got_y == target_y);
+
+        /* Off-screen positions are rejected so windows aren't lost on unplugged monitors. */
+        assert(!app_window_set_pos((__bridge void *)window, "cocoa", -20000, -20000));
+        assert(app_window_get_pos((__bridge void *)window, "cocoa", &got_x, &got_y));
+        assert(got_x == target_x && got_y == target_y);
+
+        /* Moving the window marks dirty and on_will_terminate flushes it to disk. */
+        cui_request_redraw(cui_app_ui(app));
+        assert(cui_app_frame(app));
+        frame(cui_app_ui(app), (void *)pos_path);
+        assert(settings.window_has_pos);
+        assert(settings.window_x == target_x && settings.window_y == target_y);
+        assert(window_dirty);
+        on_will_terminate();
+        assert(!window_dirty);
+
+        app_settings reloaded = default_settings;
+        assert(app_settings_load(&reloaded, pos_path));
+        assert(reloaded.window_has_pos);
+        assert(reloaded.window_x == target_x && reloaded.window_y == target_y);
         cui_app_destroy(app);
+
+        /* A new window restores the saved position on its first frame. */
+        settings = reloaded;
+        window_state_ui = NULL;
+        window_dirty = false;
+        cui_app *app2 = cui_app_create(&(cui_app_desc){
+            .hidden = true,
+            .width = settings.window_width,
+            .height = settings.window_height,
+        });
+        assert(app2);
+        assert(cui_app_frame(app2));
+        frame(cui_app_ui(app2), (void *)pos_path);
+        NSWindow *window2 = (__bridge NSWindow *)cui_app_native_window(app2);
+        assert(app_window_get_pos((__bridge void *)window2, "cocoa", &got_x, &got_y));
+        assert(got_x == target_x && got_y == target_y);
+        assert(!window_dirty);
+        cui_app_destroy(app2);
+        remove(pos_path);
     }
     return 0;
 }
