@@ -29,6 +29,7 @@ void app_menu_install(bool *settings_open) {
     [menu insertItem:[NSMenuItem separatorItem] atIndex:1];
     /* CUI consumes custom Command shortcuts before the native menu sees them. */
     [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
+        if (*target.settingsOpen) return event;
         NSEventModifierFlags modifiers = event.modifierFlags &
             (NSEventModifierFlagCommand | NSEventModifierFlagControl |
              NSEventModifierFlagOption | NSEventModifierFlagShift);

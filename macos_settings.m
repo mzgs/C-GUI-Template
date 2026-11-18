@@ -6,6 +6,7 @@ bool macos_settings_path(char *path, size_t capacity) {
         NSURL *support = [[NSFileManager defaultManager] URLsForDirectory:NSApplicationSupportDirectory
                                                                inDomains:NSUserDomainMask].firstObject;
         NSString *name = NSBundle.mainBundle.infoDictionary[@"CFBundleName"];
+        if (!name.length) name = @APP_NAME;
         if (!support || !name.length) return false;
         NSURL *folder = [support URLByAppendingPathComponent:name isDirectory:YES];
         NSURL *file = [folder URLByAppendingPathComponent:@"settings.json" isDirectory:NO];

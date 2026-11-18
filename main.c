@@ -10,6 +10,7 @@
 
 static bool settings_open;
 static bool settings_save_failed;
+static bool settings_dirty;
 static int settings_section;
 static char keybinding_filter[128];
 static app_settings settings = {
@@ -39,15 +40,15 @@ static void frame(cui_ctx *ui, void *user) {
 #ifdef __APPLE__
     app_menu_install(&settings_open);
 #else
-    if (!settings_open) {
-        cui_row(ui, .pad = 12) {
-            if (cui_button(ui, "Settings", .icon = CUI_ICON_SETTINGS)) settings_open = true;
-        }
-        if (!cui_wants_keyboard(ui) && cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_COMMA))
-            settings_open = true;
+    cui_row(ui, .pad = 12) {
+        if (cui_button(ui, "Settings", .icon = CUI_ICON_SETTINGS)) settings_open = true;
     }
+    if (!settings_open && !cui_wants_keyboard(ui) &&
+        cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_COMMA))
+        settings_open = true;
 #endif
     cui_vec2 size = cui_viewport_size(ui);
+    bool compact = size.x < 600.0f;
     cui_dialog(ui, "Settings", &settings_open, .width = size.x * 0.9f) {
         /* shortcut: pinned CUI adds 94pt for the header, padding and gap; revisit if its layout changes. */
         cui_column(ui, .height = CUI_PX(fminf(size.y * 0.9f, size.y - 48) - 94)) {
@@ -69,13 +70,17 @@ static void frame(cui_ctx *ui, void *user) {
                         bool changed = false;
                         cui_heading(ui, sections[settings_section], 4);
                         if (settings_section == 0) {
-                            cui_row(ui, .gap = 16) {
-                                cui_text(ui, "Example string", .font = CUI_FONT_MEDIUM, .width = CUI_PX(168));
-                                changed = (cui_input(ui, "example-string", settings.example_string,
-                                                     sizeof settings.example_string, .width = CUI_FILL) & CUI_CHANGED) != 0;
+                            cui_box(ui, .dir = compact ? CUI_COLUMN : CUI_ROW, .gap = compact ? 6 : 16) {
+                                cui_text(ui, "Example string", .font = CUI_FONT_MEDIUM,
+                                         .width = compact ? CUI_FILL : CUI_PX(168));
+                                int flags = cui_input(ui, "example-string", settings.example_string,
+                                                      sizeof settings.example_string, .width = CUI_FILL);
+                                if (flags & CUI_CHANGED) settings_dirty = true;
+                                if (settings_dirty && (flags & (CUI_SUBMITTED | CUI_BLURRED))) changed = true;
                             }
-                            cui_row(ui, .gap = 16) {
-                                cui_text(ui, "Example number (0–100)", .font = CUI_FONT_MEDIUM, .width = CUI_PX(168));
+                            cui_box(ui, .dir = compact ? CUI_COLUMN : CUI_ROW, .gap = compact ? 6 : 16) {
+                                cui_text(ui, "Example number (0–100)", .font = CUI_FONT_MEDIUM,
+                                         .width = compact ? CUI_FILL : CUI_PX(168));
                                 double previous = settings.example_number;
                                 if (cui_number(ui, "example-number", &settings.example_number,
                                                EXAMPLE_NUMBER_MIN, EXAMPLE_NUMBER_MAX, .width = CUI_FILL)) {
@@ -116,21 +121,30 @@ static void frame(cui_ctx *ui, void *user) {
                             cui_secondary(ui, "Version " APP_VERSION);
                             cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");
                         }
-                        if (changed) settings_save_failed = !app_settings_save(&settings, user);
+                        if (changed || (settings_dirty && settings_section != 0)) {
+                            settings_save_failed = !app_settings_save(&settings, user);
+                            settings_dirty = false;
+                        }
                         if (settings_save_failed) cui_secondary(ui, "Couldn’t save settings.");
                     }
                 }
             }
         }
     }
+    if (settings_dirty && !settings_open) {
+        settings_save_failed = !app_settings_save(&settings, user);
+        settings_dirty = false;
+    }
 }
 
 int main(void) {
     app_settings_load(&settings, NULL);
-    return cui_app_run(&(cui_app_desc){
+    int status = cui_app_run(&(cui_app_desc){
         .title = APP_NAME,
         .width = 900,
         .height = 600,
         .follow_system_theme = true,
     }, frame, NULL);
+    if (settings_dirty) app_settings_save(&settings, NULL);
+    return status;
 }

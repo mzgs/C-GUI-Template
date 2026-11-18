@@ -1,3 +1,7 @@
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "settings.h"
 #include <yyjson.h>
 #include <errno.h>
@@ -8,6 +12,10 @@
 #include <string.h>
 
 #ifdef _WIN32
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0600
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
 #include <windows.h>
 #include <shlobj.h>
 #include <wchar.h>
@@ -66,7 +74,20 @@ static bool settings_path(path_char *path, const char *override) {
 #endif
 }
 
-#ifndef _WIN32
+#ifdef _WIN32
+static bool create_directories(wchar_t *path) {
+    DWORD attrs = GetFileAttributesW(path);
+    if (attrs != INVALID_FILE_ATTRIBUTES) return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    if (CreateDirectoryW(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) return true;
+    if (GetLastError() != ERROR_PATH_NOT_FOUND) return false;
+    wchar_t *slash = wcsrchr(path, L'\\');
+    if (!slash || slash == path) return false;
+    *slash = L'\0';
+    bool parent = create_directories(path);
+    *slash = L'\\';
+    return parent && (CreateDirectoryW(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS);
+}
+#else
 static bool create_directories(char *path) {
     if (mkdir(path, 0700) == 0 || errno == EEXIST) return true;
     if (errno != ENOENT) return false;
@@ -85,9 +106,13 @@ static bool write_settings(const path_char *path, yyjson_mut_doc *doc) {
     wchar_t dir[SETTINGS_PATH_CAP];
     wcscpy(dir, path);
     wchar_t *slash = wcsrchr(dir, L'\\');
-    if (!slash) return false;
-    *slash = L'\0';
-    if (!CreateDirectoryW(dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return false;
+    if (!slash) {
+        wcscpy(dir, L".");
+    } else {
+        if (slash == dir || (slash == dir + 2 && dir[1] == L':')) slash[1] = L'\0';
+        else *slash = L'\0';
+        if (!create_directories(dir)) return false;
+    }
     if (!GetTempFileNameW(dir, L"cfg", 0, temp)) return false;
     FILE *file = _wfopen(temp, L"wb");
 #else
@@ -117,8 +142,89 @@ static bool write_settings(const path_char *path, yyjson_mut_doc *doc) {
     return false;
 }
 
+static const struct {
+    int bit;
+    const char *name;
+} mod_entries[] = {
+    { CUI_MOD_SHIFT, "shift" },
+    { CUI_MOD_CTRL, "ctrl" },
+    { CUI_MOD_ALT, "alt" },
+    { CUI_MOD_SUPER, "super" },
+};
+
 static double json_number(yyjson_val *value) {
     return yyjson_is_num(value) ? yyjson_get_num(value) : NAN;
+}
+
+static bool parse_key(yyjson_val *value, cui_key *out) {
+    if (yyjson_is_str(value)) {
+        const char *text = yyjson_get_str(value);
+        size_t len = yyjson_get_len(value);
+        if (!text || memchr(text, '\0', len)) return false;
+        if (len == 0) {
+            *out = CUI_KEY_NONE;
+            return true;
+        }
+        for (int k = 1; k < CUI_KEY_COUNT; ++k) {
+            if (strcmp(cui_key_name((cui_key)k), text) == 0) {
+                *out = (cui_key)k;
+                return true;
+            }
+        }
+        return false;
+    }
+    double num = json_number(value);
+    if (num >= CUI_KEY_NONE && num < CUI_KEY_COUNT && num == floor(num)) {
+        *out = (cui_key)num;
+        return true;
+    }
+    return false;
+}
+
+static bool parse_mods(yyjson_val *value, int *out) {
+    if (yyjson_is_str(value)) {
+        const char *text = yyjson_get_str(value);
+        size_t len = yyjson_get_len(value);
+        if (!text || memchr(text, '\0', len)) return false;
+        int bits = 0;
+        const char *p = text;
+        while (*p) {
+            while (*p == ' ') ++p;
+            if (!*p) break;
+            const char *start = p;
+            while (*p && *p != ' ') ++p;
+            size_t tok_len = (size_t)(p - start);
+            int matched = 0;
+            for (size_t i = 0; i < sizeof mod_entries / sizeof mod_entries[0]; ++i) {
+                if (strlen(mod_entries[i].name) == tok_len &&
+                    memcmp(mod_entries[i].name, start, tok_len) == 0) {
+                    matched = mod_entries[i].bit;
+                    break;
+                }
+            }
+            if (!matched) return false;
+            bits |= matched;
+        }
+        *out = bits;
+        return true;
+    }
+    const int mod_mask = CUI_MOD_SHIFT | CUI_MOD_CTRL | CUI_MOD_ALT | CUI_MOD_SUPER;
+    double num = json_number(value);
+    if (num >= 0 && num <= mod_mask && num == floor(num)) {
+        *out = (int)num;
+        return true;
+    }
+    return false;
+}
+
+static void format_mods(int mods, char *buf, size_t cap) {
+    size_t used = 0;
+    buf[0] = '\0';
+    for (size_t i = 0; i < sizeof mod_entries / sizeof mod_entries[0]; ++i) {
+        if (!(mods & mod_entries[i].bit)) continue;
+        int n = snprintf(buf + used, cap - used, "%s%s", used ? " " : "", mod_entries[i].name);
+        if (n > 0 && (size_t)n < cap - used) used += (size_t)n;
+    }
 }
 
 void app_settings_load(app_settings *settings, const char *override) {
@@ -151,14 +257,13 @@ void app_settings_load(app_settings *settings, const char *override) {
     if (number >= EXAMPLE_NUMBER_MIN && number <= EXAMPLE_NUMBER_MAX)
         settings->example_number = number;
 
-    const int mod_mask = CUI_MOD_SHIFT | CUI_MOD_CTRL | CUI_MOD_ALT | CUI_MOD_SUPER;
     for (size_t i = 0; i < sizeof settings->keybindings / sizeof settings->keybindings[0]; ++i) {
-        double key = json_number(yyjson_obj_get(root, settings->keybindings[i].key_name));
-        double mods = json_number(yyjson_obj_get(root, settings->keybindings[i].mods_name));
-        if (key >= CUI_KEY_NONE && key < CUI_KEY_COUNT && key == floor(key) &&
-            mods >= 0 && mods <= mod_mask && mods == floor(mods) &&
+        cui_key key = CUI_KEY_NONE;
+        int mods = 0;
+        if (parse_key(yyjson_obj_get(root, settings->keybindings[i].key_name), &key) &&
+            parse_mods(yyjson_obj_get(root, settings->keybindings[i].mods_name), &mods) &&
             (key != CUI_KEY_NONE || mods == 0))
-            settings->keybindings[i].combo = (cui_key_combo){ (int)mods, (cui_key)key };
+            settings->keybindings[i].combo = (cui_key_combo){ mods, key };
     }
     yyjson_doc_free(doc);
 }
@@ -174,8 +279,10 @@ bool app_settings_save(const app_settings *settings, const char *override) {
         yyjson_mut_obj_add_real(doc, root, "example_number", settings->example_number);
     for (size_t i = 0; ok && i < sizeof settings->keybindings / sizeof settings->keybindings[0]; ++i) {
         cui_key_combo combo = settings->keybindings[i].combo;
-        ok = yyjson_mut_obj_add_int(doc, root, settings->keybindings[i].key_name, combo.key) &&
-             yyjson_mut_obj_add_int(doc, root, settings->keybindings[i].mods_name, combo.mods);
+        char mods_buf[32];
+        format_mods(combo.mods, mods_buf, sizeof mods_buf);
+        ok = yyjson_mut_obj_add_str(doc, root, settings->keybindings[i].key_name, cui_key_name(combo.key)) &&
+             yyjson_mut_obj_add_strcpy(doc, root, settings->keybindings[i].mods_name, mods_buf);
     }
     bool saved = ok && write_settings(path, doc);
     yyjson_mut_doc_free(doc);
