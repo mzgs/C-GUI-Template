@@ -336,6 +336,31 @@ static void check_import_export(const char *base_dir, cui_theme_mode theme) {
     assert(settings.example_number == 84);
     assert(settings_status && strstr(settings_status, "import") != NULL);
 
+    /* Reset to defaults: requires two-step confirm and disarms after timeout. */
+    press_key(ui, CUI_KEY_TAB, 0); /* Export... */
+    press_key(ui, CUI_KEY_TAB, 0); /* Reset */
+    press_key(ui, CUI_KEY_ENTER, 0); /* Arms confirmation */
+    assert(strcmp(settings.example_string, "Exported Value") == 0);
+    /* Advance past 3s timeout so it disarms; next Enter re-arms without resetting. */
+    cui_begin_frame(ui, 4.0f);
+    frame(ui, (void *)test_settings_path);
+    cui_end_frame(ui);
+    press_key(ui, CUI_KEY_ENTER, 0); /* Re-arm */
+    assert(strcmp(settings.example_string, "Exported Value") == 0);
+    press_key(ui, CUI_KEY_ENTER, 0); /* Confirm */
+    assert(strcmp(settings.example_string, default_settings.example_string) == 0);
+    assert(settings.example_number == default_settings.example_number);
+    assert(settings.keybindings[0].combo.key == default_settings.keybindings[0].combo.key);
+    assert(settings.keybindings[0].combo.mods == default_settings.keybindings[0].combo.mods);
+    assert(settings_status && strcmp(settings_status, "Settings reset to defaults.") == 0);
+
+    persisted = original;
+    strcpy(persisted.example_string, "Stale");
+    assert(app_settings_load(&persisted, test_settings_path));
+    assert(strcmp(persisted.example_string, default_settings.example_string) == 0);
+    assert(persisted.example_number == default_settings.example_number);
+    assert(persisted.keybindings[0].combo.key == default_settings.keybindings[0].combo.key);
+
     /* Closing settings clears status. */
     settings_open = false;
     draw_settings(ui);

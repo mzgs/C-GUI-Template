@@ -8,6 +8,18 @@
 
 bool macos_settings_path(char *path, size_t capacity);
 
+@interface MenuProbe : NSObject
+@property(nonatomic, assign) bool triggered;
+- (void)menuAction:(id)sender;
+@end
+
+@implementation MenuProbe
+- (void)menuAction:(id)sender {
+    (void)sender;
+    self.triggered = true;
+}
+@end
+
 int main(void) {
     @autoreleasepool {
         /* Default macOS path works even outside a .app bundle by falling back to APP_NAME. */
@@ -39,20 +51,24 @@ int main(void) {
         assert([NSApp.mainMenu performKeyEquivalent:shortcut]);
         assert(settings_open);
 
+        /* Probe the menu item action instead of a second local event monitor,
+         * since AppKit does not guarantee invocation order across monitors. */
+        NSMenuItem *settings_item = [menu itemAtIndex:0];
+        id orig_target = settings_item.target;
+        SEL orig_action = settings_item.action;
+        MenuProbe *probe = [[MenuProbe alloc] init];
+        settings_item.target = probe;
+        settings_item.action = @selector(menuAction:);
+
         settings_open = false;
-        __block bool passed_monitor = false;
-        id probe_monitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
-            passed_monitor = true;
-            return event;
-        }];
         cui_request_redraw(cui_app_ui(app));
         assert(cui_app_frame(app));
         [NSApp sendEvent:shortcut];
         frame(cui_app_ui(app), NULL);
         assert(settings_open);
-        assert(!passed_monitor);
+        assert(!probe.triggered);
 
-        /* While Settings is open, Cmd+, passes through the monitor to CUI. */
+        /* While Settings is open, Cmd+, passes through the monitor to AppKit / CUI. */
         NSWindow *window = (__bridge NSWindow *)cui_app_native_window(app);
         NSEvent *window_shortcut = [NSEvent keyEventWithType:NSEventTypeKeyDown
             location:NSZeroPoint modifierFlags:NSEventModifierFlagCommand
@@ -61,10 +77,11 @@ int main(void) {
         cui_request_redraw(cui_app_ui(app));
         assert(cui_app_frame(app));
         [NSApp sendEvent:window_shortcut];
-        assert(passed_monitor);
+        assert(probe.triggered);
+        settings_item.target = orig_target;
+        settings_item.action = orig_action;
         assert([window performKeyEquivalent:window_shortcut]);
         assert(cui_shortcut(cui_app_ui(app), CUI_MOD_PRIMARY, CUI_KEY_COMMA));
-        [NSEvent removeMonitor:probe_monitor];
 
         cui_request_redraw(cui_app_ui(app));
         assert(cui_app_frame(app));

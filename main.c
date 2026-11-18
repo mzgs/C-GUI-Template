@@ -20,14 +20,17 @@ static bool default_file_dialog(const cui_file_dialog_opts *opts, char *out, siz
 }
 
 static bool (*settings_file_dialog)(const cui_file_dialog_opts *opts, char *out, size_t cap) = default_file_dialog;
-static app_settings settings = {
-    .example_string = "Example",
-    .example_number = 42,
-    .keybindings = {
-        { "Find", "find", { CUI_MOD_PRIMARY, CUI_KEY_F } },
-        { "Save", "save", { CUI_MOD_PRIMARY, CUI_KEY_S } },
-    },
-};
+#define APP_SETTINGS_DEFAULT { \
+    .example_string = "Example", \
+    .example_number = 42, \
+    .keybindings = { \
+        { "Find", "find", { CUI_MOD_PRIMARY, CUI_KEY_F } }, \
+        { "Save", "save", { CUI_MOD_PRIMARY, CUI_KEY_S } }, \
+    }, \
+}
+
+static const app_settings default_settings = APP_SETTINGS_DEFAULT;
+static app_settings settings = APP_SETTINGS_DEFAULT;
 
 static bool contains_ignore_case(const char *text, const char *query) {
     for (; *text; ++text) {
@@ -76,7 +79,7 @@ static void frame(cui_ctx *ui, void *user) {
                 }
                 cui_separator(ui);
                 cui_scroll(ui, .id = "settings-page", .width = CUI_FILL) {
-                    cui_column(ui, .height = CUI_FILL, .gap = 12) {
+                    cui_column(ui, .height = settings_section == 1 ? CUI_FILL : CUI_FIT, .gap = 12) {
                         bool changed = false;
                         cui_heading(ui, sections[settings_section], 4);
                         if (settings_section == 0) {
@@ -142,6 +145,19 @@ static void frame(cui_ctx *ui, void *user) {
                                                 : "Couldn’t export settings.";
                                         }
                                     }
+                                }
+                            }
+                            cui_box(ui, .dir = compact ? CUI_COLUMN : CUI_ROW, .gap = compact ? 6 : 16) {
+                                cui_text(ui, "Reset settings", .font = CUI_FONT_MEDIUM,
+                                         .width = compact ? CUI_FILL : CUI_PX(168));
+                                if (cui_confirm_button(ui, "Reset",
+                                                       .icon = CUI_ICON_ROTATE_CCW,
+                                                       .confirm_label = "Confirm")) {
+                                    settings = default_settings;
+                                    settings_save_failed = !app_settings_save(&settings, user);
+                                    settings_dirty = false;
+                                    changed = false;
+                                    settings_status = settings_save_failed ? NULL : "Settings reset to defaults.";
                                 }
                             }
                             if (settings_status) cui_secondary(ui, settings_status);
