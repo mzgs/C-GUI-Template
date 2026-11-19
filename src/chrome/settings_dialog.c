@@ -206,7 +206,7 @@ static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
     return changed;
 }
 
-static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
+static void draw_about_section(cui_ctx *ui) {
     cui_text(ui, APP_NAME, .font = CUI_FONT_MEDIUM);
     cui_secondary(ui, "Version " APP_VERSION);
     cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");
@@ -217,15 +217,6 @@ static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
     snprintf(runtime_info, sizeof runtime_info, "Backend: %s  ·  Renderer: %s",
              backend ? backend : "unknown", renderer);
     cui_secondary(ui, runtime_info);
-    char dir[4096];
-    if (app_settings_dir(dir, sizeof dir, chrome->cli.settings_path, false)) {
-        cui_secondary(ui, dir);
-    }
-    cui_row(ui, .gap = 8, .wrap = true) {
-        if (cui_button(ui, "Open Settings Folder", .icon = CUI_ICON_FOLDER_OPEN)) {
-            chrome_open_settings_folder(chrome, ui);
-        }
-    }
 }
 
 void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
@@ -266,7 +257,7 @@ void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
                             changed = draw_keybindings_section(chrome, ui);
                             break;
                         default:
-                            draw_about_section(chrome, ui);
+                            draw_about_section(ui);
                             break;
                         }
                         if (changed || (chrome->settings_dirty && chrome->settings_section != SETTINGS_SECTION_GENERAL)) {
