@@ -84,6 +84,16 @@ Cross-platform CI (`.github/workflows/ci.yml`) runs only when a `v*` tag is push
 
 This auto-increments `VERSION` in `CMakeLists.txt` (`0.1.0` → `0.1.1`), commits, tags `v<version>`, and pushes to trigger GitHub Actions builds and smoke tests for macOS, Linux, and Windows, publishing packaged archives as a GitHub Release. Pass an explicit version (e.g. `./release.sh 1.0.0`) to jump to a specific version, or `--dry-run` to preview.
 
+### Install latest release (macOS / Linux)
+
+Install or update directly from GitHub Releases (avoids browser `com.apple.quarantine` Gatekeeper warnings for non-notarized macOS builds):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mzgs/C-GUI-Template/main/install.sh | sh
+```
+
+Pass a specific tag with `sh -s -- v0.1.3`, or override `REPO`, `VERSION`, and `INSTALL_DIR` via environment variables. On macOS this installs into `/Applications` (or `~/Applications` if `/Applications` is not writable); on Linux it installs into `~/.local/bin`. Update `REPO` at the top of `install.sh` when forking this template.
+
 ### macOS code signing (optional)
 
 To keep a consistent signature across updates (so macOS preserves granted permissions) without committing private keys to git, store your `.p12` certificate and password once on your machine:
