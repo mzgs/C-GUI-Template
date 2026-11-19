@@ -86,9 +86,11 @@ This auto-increments `VERSION` in `CMakeLists.txt` (`0.1.0` → `0.1.1`), commit
 
 ### macOS code signing (optional)
 
-To keep a consistent signature across updates (so macOS preserves granted permissions), add two GitHub Actions repository secrets:
+To keep a consistent signature across updates (so macOS preserves granted permissions) without committing private keys to git, store your `.p12` certificate and password once on your machine:
 
-- `MACOS_CERT_P12` — base64-encoded `.p12` signing certificate (`base64 -i macos-codesign.p12 | tr -d '\n'`)
-- `MACOS_CERT_PASSWORD` — password for the `.p12` file
+```text
+~/.macos-codesign/macos-codesign.p12
+~/.macos-codesign/password
+```
 
-Works with either a free self-signed Code Signing `.p12` or an Apple Developer ID `.p12`. Keep `*.p12` out of git (already listed in `.gitignore`) and set a unique `APP_BUNDLE_ID` in `CMakeLists.txt` per app.
+When those files exist and `gh` is logged in (`gh auth login`), `./release.sh` automatically uploads `MACOS_CERT_P12` and `MACOS_CERT_PASSWORD` to the current GitHub repo on the first release—so new apps forked from this template get signed automatically with zero manual secret setup. You can also set the two secrets manually in GitHub Actions settings. Works with either a free self-signed Code Signing `.p12` or an Apple Developer ID `.p12`; set a unique `APP_BUNDLE_ID` in `CMakeLists.txt` per app.

@@ -4,8 +4,79 @@ set -eu
 cd -- "$(dirname -- "$0")"
 
 REMOTE="${REMOTE:-origin}"
+SIGNING_DIR="${MACOS_SIGNING_DIR:-$HOME/.macos-codesign}"
 DRY_RUN=0
 RAW_VERSION=""
+
+github_repo_slug() {
+    git remote get-url "$REMOTE" 2>/dev/null | sed -E \
+        -e 's#^https?://([^@]+@)?github\.com/##' \
+        -e 's#^ssh://git@github\.com/##' \
+        -e 's#^git@github\.com:##' \
+        -e 's#\.git$##'
+}
+
+sync_macos_signing_secrets() {
+    if [ "${SKIP_SIGNING_SYNC:-0}" = "1" ]; then
+        return 0
+    fi
+
+    cert_file="$SIGNING_DIR/macos-codesign.p12"
+    pass_file="$SIGNING_DIR/password"
+    if [ ! -f "$cert_file" ] || [ ! -f "$pass_file" ]; then
+        return 0
+    fi
+
+    gh_repo="$(github_repo_slug)"
+    if ! printf '%s\n' "$gh_repo" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'; then
+        return 0
+    fi
+
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "Found $SIGNING_DIR, but 'gh' CLI is not installed." >&2
+        echo "Install with 'brew install gh && gh auth login', or set SKIP_SIGNING_SYNC=1 to release unsigned." >&2
+        exit 1
+    fi
+
+    if ! gh auth status >/dev/null 2>&1; then
+        echo "Found $SIGNING_DIR, but 'gh' is not logged in." >&2
+        echo "Run 'gh auth login', or set SKIP_SIGNING_SYNC=1 to release unsigned." >&2
+        exit 1
+    fi
+
+    if ! secret_list="$(gh secret list -R "$gh_repo")"; then
+        echo "Could not list GitHub Actions secrets for '$gh_repo'." >&2
+        exit 1
+    fi
+    secret_names="$(printf '%s\n' "$secret_list" | awk '{ print $1 }')"
+
+    need_cert=0
+    need_pass=0
+    printf '%s\n' "$secret_names" | grep -qx 'MACOS_CERT_P12' || need_cert=1
+    printf '%s\n' "$secret_names" | grep -qx 'MACOS_CERT_PASSWORD' || need_pass=1
+
+    if [ "$need_cert" -eq 0 ] && [ "$need_pass" -eq 0 ]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "[dry-run] GitHub signing secrets already configured on $gh_repo"
+        fi
+        return 0
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        [ "$need_cert" -eq 1 ] && echo "[dry-run] Upload secret MACOS_CERT_P12 to $gh_repo from $cert_file"
+        [ "$need_pass" -eq 1 ] && echo "[dry-run] Upload secret MACOS_CERT_PASSWORD to $gh_repo from $pass_file"
+        return 0
+    fi
+
+    if [ "$need_cert" -eq 1 ]; then
+        echo "Uploading MACOS_CERT_P12 to $gh_repo..."
+        base64 < "$cert_file" | tr -d '\r\n' | gh secret set MACOS_CERT_P12 -R "$gh_repo"
+    fi
+    if [ "$need_pass" -eq 1 ]; then
+        echo "Uploading MACOS_CERT_PASSWORD to $gh_repo..."
+        tr -d '\r\n' < "$pass_file" | gh secret set MACOS_CERT_PASSWORD -R "$gh_repo"
+    fi
+}
 
 current_version() {
     awk '
@@ -135,6 +206,8 @@ elif [ "$rc" -ne 2 ]; then
     echo "Could not query remote '$REMOTE' (git ls-remote exited $rc)." >&2
     exit 1
 fi
+
+sync_macos_signing_secrets
 
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] Branch: $BRANCH -> remote: $REMOTE"
