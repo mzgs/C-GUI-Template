@@ -62,6 +62,9 @@ endif()
 add_executable(empty_gui MACOSX_BUNDLE main.c)
 target_link_libraries(empty_gui PRIVATE app_chrome app_common cui::cui)
 cui_app_target(empty_gui)
+install(TARGETS empty_gui
+    BUNDLE DESTINATION . COMPONENT app
+    RUNTIME DESTINATION . COMPONENT app)
 if(APPLE)
     set_target_properties(empty_gui PROPERTIES
         OUTPUT_NAME "${APP_NAME}"

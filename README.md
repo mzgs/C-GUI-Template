@@ -73,3 +73,22 @@ ctest --test-dir build -C Release --output-on-failure
 ```
 
 The smoke test requires a graphical desktop session and saves `build/window-smoke.png`.
+
+## Release
+
+Cross-platform CI (`.github/workflows/ci.yml`) runs only when a `v*` tag is pushed via `release.sh`:
+
+```sh
+./release.sh
+```
+
+This auto-increments `VERSION` in `CMakeLists.txt` (`0.1.0` → `0.1.1`), commits, tags `v<version>`, and pushes to trigger GitHub Actions builds and smoke tests for macOS, Linux, and Windows, publishing packaged archives as a GitHub Release. Pass an explicit version (e.g. `./release.sh 1.0.0`) to jump to a specific version, or `--dry-run` to preview.
+
+### macOS code signing (optional)
+
+To keep a consistent signature across updates (so macOS preserves granted permissions), add two GitHub Actions repository secrets:
+
+- `MACOS_CERT_P12` — base64-encoded `.p12` signing certificate (`base64 -i macos-codesign.p12 | tr -d '\n'`)
+- `MACOS_CERT_PASSWORD` — password for the `.p12` file
+
+Works with either a free self-signed Code Signing `.p12` or an Apple Developer ID `.p12`. Keep `*.p12` out of git (already listed in `.gitignore`) and set a unique `APP_BUNDLE_ID` in `CMakeLists.txt` per app.
