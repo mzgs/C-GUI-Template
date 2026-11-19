@@ -81,9 +81,7 @@ const app_settings *app_chrome_settings(const app_chrome *chrome) {
 
 void chrome_open_settings_folder(app_chrome *chrome, cui_ctx *ui) {
     char dir[4096];
-    if (app_settings_dir(dir, sizeof dir, chrome->cli.settings_path, true) && cui_app_open_url(dir)) {
-        app_chrome_notify(chrome, ui, "Opened settings folder.", CUI_TONE_INFO);
-    } else {
+    if (!app_settings_dir(dir, sizeof dir, chrome->cli.settings_path, true) || !cui_app_open_url(dir)) {
         app_chrome_notify(chrome, ui, "Couldn’t open settings folder.", CUI_TONE_DANGER);
     }
 }
