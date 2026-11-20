@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #ifdef __APPLE__
 #include "app_menu.h"
@@ -38,6 +39,9 @@ static const app_settings k_default_settings = {
         .width = 900,
         .height = 600,
         .fullscreen = false,
+    },
+    .updates = {
+        .check_on_startup = true,
     },
     .keybindings = {
         [APP_ACTION_FIND] = { "Find", "find", { CUI_MOD_PRIMARY, CUI_KEY_F } },
@@ -273,11 +277,14 @@ static app_updater *chrome_ensure_updater(app_chrome *chrome) {
     return chrome->updater;
 }
 
-void chrome_check_for_updates(app_chrome *chrome) {
+void chrome_check_for_updates(app_chrome *chrome, bool silent) {
     app_updater *updater = chrome_ensure_updater(chrome);
     if (updater) {
         chrome->update_auto_checked = true;
-        app_updater_check(updater);
+        if (app_updater_check(updater)) {
+            chrome->update_check_pending = true;
+            chrome->update_check_silent = silent;
+        }
     }
 }
 
@@ -286,9 +293,17 @@ void chrome_start_update(app_chrome *chrome, cui_ctx *ui) {
     chrome_updater_snapshot(chrome, &snap);
     if (!snap.has_update) return;
 
+    chrome->update_check_silent = false;
     if (app_updater_can_self_update()) {
         app_updater *updater = chrome_ensure_updater(chrome);
-        if (updater) app_updater_start_install(updater);
+        if (updater && app_updater_start_install(updater)) {
+            if (!(chrome->settings_open && chrome->settings_section == SETTINGS_SECTION_ABOUT)) {
+                const char *ver = snap.latest_tag[0] ? snap.latest_tag : snap.latest_version;
+                char msg[96];
+                snprintf(msg, sizeof msg, "Updating to %s…", ver);
+                app_chrome_notify(chrome, ui, msg, CUI_TONE_INFO);
+            }
+        }
         return;
     }
 
@@ -304,6 +319,13 @@ void chrome_updater_snapshot(app_chrome *chrome, app_update_snapshot *out) {
 }
 
 static void chrome_poll_updater(app_chrome *chrome, cui_ctx *ui) {
+    if (chrome->update_toast_handle > 0 &&
+        cui_toast_action_clicked(ui, chrome->update_toast_handle)) {
+        cui_toast_dismiss(ui, chrome->update_toast_handle);
+        chrome->update_toast_handle = 0;
+        chrome_start_update(chrome, ui);
+    }
+
     if (!chrome->updater) return;
     app_update_snapshot snap;
     app_updater_snapshot(chrome->updater, &snap);
@@ -312,7 +334,36 @@ static void chrome_poll_updater(app_chrome *chrome, cui_ctx *ui) {
         cui_request_wakeup(ui, 0.1f);
     }
 
-    if (snap.state == APP_UPDATE_READY_TO_RELAUNCH && !chrome->update_relaunching) {
+    if (chrome->update_check_pending) {
+        if (snap.state == APP_UPDATE_UP_TO_DATE || snap.state == APP_UPDATE_AVAILABLE) {
+            chrome->update_check_pending = false;
+            int64_t now = (int64_t)time(NULL);
+            if (now > 0) {
+                chrome->settings.updates.last_checked = now;
+                chrome_save_settings(chrome, ui);
+            }
+        } else if (snap.state == APP_UPDATE_ERROR) {
+            chrome->update_check_pending = false;
+        }
+    }
+
+    bool about_visible = chrome->settings_open && chrome->settings_section == SETTINGS_SECTION_ABOUT;
+    if (snap.state == APP_UPDATE_AVAILABLE && snap.has_update && !chrome->update_notified) {
+        chrome->update_notified = true;
+        if (!about_visible) {
+            const char *ver = snap.latest_tag[0] ? snap.latest_tag : snap.latest_version;
+            char title[96];
+            snprintf(title, sizeof title, "Update available: %s", ver);
+            const char *desc = app_updater_can_self_update()
+                ? "Click Update to download and relaunch."
+                : "Click Update to open the release page.";
+            chrome->update_toast_handle = cui_toast(ui, title,
+                .description = desc,
+                .tone = CUI_TONE_INFO,
+                .duration = 8.0f,
+                .action = "Update");
+        }
+    } else if (snap.state == APP_UPDATE_READY_TO_RELAUNCH && !chrome->update_relaunching) {
         chrome->update_relaunching = true;
         capture_live_window_bounds(chrome);
         save_if_dirty(chrome);
@@ -323,7 +374,8 @@ static void chrome_poll_updater(app_chrome *chrome, cui_ctx *ui) {
         }
     } else if (snap.state == APP_UPDATE_ERROR &&
                chrome->last_update_state != APP_UPDATE_ERROR &&
-               !(chrome->settings_open && chrome->settings_section == SETTINGS_SECTION_ABOUT)) {
+               !chrome->update_check_silent &&
+               !about_visible) {
         app_chrome_notify(chrome, ui,
                           snap.error[0] ? snap.error : "Update failed.",
                           CUI_TONE_DANGER);
@@ -373,6 +425,15 @@ static void sync_window_state(app_chrome *chrome, cui_ctx *ui) {
             cui_app_set_fullscreen(NULL, true);
             chrome->window_fullscreen_pending = true;
             chrome->window_fullscreen_since = cui_time(ui);
+        }
+        if (!chrome->update_startup_checked &&
+            !chrome->env_screenshot_mode &&
+            chrome->settings.updates.check_on_startup &&
+            app_updater_configured()) {
+            chrome->update_startup_checked = true;
+            if (app_updater_check_due(chrome->settings.updates.last_checked, (int64_t)time(NULL))) {
+                chrome_check_for_updates(chrome, true);
+            }
         }
     }
     if (chrome->window_fullscreen_pending) {
@@ -573,8 +634,10 @@ bool app_chrome_init(app_chrome *chrome, int argc, char **argv, int *exit_code) 
     app_settings_load(&chrome->settings, chrome->cli.settings_path);
     const char *env_theme = getenv("CUI_THEME");
     const char *env_accent = getenv("CUI_ACCENT");
+    const char *env_screenshot = getenv("CUI_SCREENSHOT");
     chrome->env_theme_override = env_theme && env_theme[0] != '\0';
     chrome->env_accent_override = env_accent && env_accent[0] != '\0';
+    chrome->env_screenshot_mode = env_screenshot && env_screenshot[0] != '\0';
     return true;
 }
 

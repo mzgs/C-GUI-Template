@@ -207,14 +207,15 @@ static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
     return changed;
 }
 
-static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
+static bool draw_about_section(app_chrome *chrome, cui_ctx *ui) {
+    bool changed = false;
     cui_text(ui, APP_NAME, .font = CUI_FONT_MEDIUM);
     cui_secondary(ui, "Version " APP_VERSION);
     if (APP_DESCRIPTION[0]) cui_secondary(ui, APP_DESCRIPTION);
 
     if (app_updater_configured()) {
         if (!chrome->update_auto_checked) {
-            chrome_check_for_updates(chrome);
+            chrome_check_for_updates(chrome, false);
         }
         app_update_snapshot upd;
         chrome_updater_snapshot(chrome, &upd);
@@ -286,6 +287,12 @@ static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
                 }
             }
         }
+
+        if (cui_switch(ui, "Check for updates on startup",
+                       &chrome->settings.updates.check_on_startup,
+                       .description = "Silently check GitHub Releases at most once a day on launch")) {
+            changed = true;
+        }
     }
 
     cui_separator(ui);
@@ -310,11 +317,14 @@ static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
                .radius = 10, .pad_x = 12, .pad_y = 10) {
         cui_text(ui, debug_info, .font = CUI_FONT_MONO, .size = 12, .selectable = true);
     }
+    return changed;
 }
 
 void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
     cui_vec2 size = cui_viewport_size(ui);
     bool compact = size.x < 600.0f;
+    app_update_snapshot nav_upd;
+    chrome_updater_snapshot(chrome, &nav_upd);
 
     cui_dialog(ui, "Settings", &chrome->settings_open, .width = size.x * 0.9f) {
         /* shortcut: pinned CUI adds 94pt for the header, padding and gap; revisit if its layout changes. */
@@ -325,7 +335,9 @@ void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
                     cui_scroll(ui, .id = "settings-sidebar", .gap = 4) {
                         for (int i = 0; i < SETTINGS_SECTION_COUNT; ++i) {
                             if (i == SETTINGS_SECTION_ABOUT) cui_separator(ui);
+                            const char *badge = (i == SETTINGS_SECTION_ABOUT && nav_upd.has_update) ? "New" : NULL;
                             if (cui_nav_item(ui, chrome_section_labels[i], .icon = chrome_section_icons[i],
+                                             .badge = badge,
                                              .selected = chrome->settings_section == i,
                                              .group = "settings-sections")) {
                                 chrome->settings_section = i;
@@ -350,7 +362,7 @@ void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
                             changed = draw_keybindings_section(chrome, ui);
                             break;
                         default:
-                            draw_about_section(chrome, ui);
+                            changed = draw_about_section(chrome, ui);
                             break;
                         }
                         if (changed || (chrome->settings_dirty && chrome->settings_section != SETTINGS_SECTION_GENERAL)) {

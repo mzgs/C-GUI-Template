@@ -78,10 +78,25 @@ static void test_compare_versions(void) {
     CHECK(app_updater_compare_versions("1.2.3-", "0.1.4") == -2);
 }
 
+static void test_check_due(void) {
+    const int64_t day = APP_UPDATE_CHECK_INTERVAL_SEC;
+    const int64_t base = 1700000000;
+
+    CHECK(app_updater_check_due(0, base));
+    CHECK(app_updater_check_due(-1, base));
+    CHECK(!app_updater_check_due(base, base));
+    CHECK(!app_updater_check_due(base, base + day - 1));
+    CHECK(app_updater_check_due(base, base + day));
+    CHECK(app_updater_check_due(base, base + day + 3600));
+    /* Clock moved backwards should still allow checking. */
+    CHECK(app_updater_check_due(base + 100, base));
+}
+
 int main(void) {
     test_valid_repo();
     test_extract_release_tag();
     test_compare_versions();
+    test_check_due();
     if (failures > 0) {
         fprintf(stderr, "%d test(s) failed\n", failures);
         return 1;

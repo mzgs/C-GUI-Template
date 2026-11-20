@@ -391,6 +391,24 @@ bool app_settings_load(app_settings *settings, const char *override) {
         }
     }
 
+    yyjson_val *updates = yyjson_obj_get(root, "updates");
+    if (yyjson_is_obj(updates)) {
+        yyjson_val *check_on_startup = yyjson_obj_get(updates, "check_on_startup");
+        if (yyjson_is_bool(check_on_startup)) {
+            loaded.updates.check_on_startup = yyjson_get_bool(check_on_startup);
+            applied = true;
+        }
+        yyjson_val *last_checked = yyjson_obj_get(updates, "last_checked");
+        if (yyjson_is_int(last_checked) &&
+            (!yyjson_is_uint(last_checked) || yyjson_get_uint(last_checked) <= (uint64_t)INT64_MAX)) {
+            int64_t ts = yyjson_get_sint(last_checked);
+            if (ts >= 0) {
+                loaded.updates.last_checked = ts;
+                applied = true;
+            }
+        }
+    }
+
     yyjson_val *keybindings = yyjson_obj_get(root, "keybindings");
     if (yyjson_is_obj(keybindings)) {
         for (int i = 0; i < APP_ACTION_COUNT; ++i) {
@@ -447,6 +465,14 @@ bool app_settings_save(const app_settings *settings, const char *override) {
         yyjson_mut_obj_add_int(doc, window, "height", settings->window.height) &&
         yyjson_mut_obj_add_bool(doc, window, "fullscreen", settings->window.fullscreen) &&
         yyjson_mut_obj_add_val(doc, root, "window", window);
+
+    yyjson_mut_val *updates = ok ? yyjson_mut_obj(doc) : NULL;
+    ok = ok && updates &&
+        yyjson_mut_obj_add_bool(doc, updates, "check_on_startup", settings->updates.check_on_startup);
+    if (ok && settings->updates.last_checked > 0) {
+        ok = yyjson_mut_obj_add_sint(doc, updates, "last_checked", settings->updates.last_checked);
+    }
+    ok = ok && yyjson_mut_obj_add_val(doc, root, "updates", updates);
 
     yyjson_mut_val *keybindings = ok ? yyjson_mut_obj(doc) : NULL;
     ok = ok && keybindings && yyjson_mut_obj_add_val(doc, root, "keybindings", keybindings);

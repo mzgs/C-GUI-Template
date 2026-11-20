@@ -3,6 +3,11 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
+
+enum {
+    APP_UPDATE_CHECK_INTERVAL_SEC = 24 * 60 * 60,
+};
 
 typedef enum {
     APP_UPDATE_IDLE = 0,
@@ -31,6 +36,8 @@ bool app_updater_valid_repo(const char *repo);
 bool app_updater_extract_release_tag(const char *url, char *tag, size_t cap);
 /* Returns 1 if candidate > current, 0 if equal, -1 if older, -2 on parse error. */
 int app_updater_compare_versions(const char *candidate, const char *current);
+/* True when at least APP_UPDATE_CHECK_INTERVAL_SEC has elapsed since last_checked (or never checked). */
+bool app_updater_check_due(int64_t last_checked, int64_t now);
 
 /* True when APP_GITHUB_REPO is configured with a valid "owner/repo" slug. */
 bool app_updater_configured(void);

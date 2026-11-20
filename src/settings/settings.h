@@ -4,6 +4,7 @@
 #include <cui/cui.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 enum {
     EXAMPLE_NUMBER_MIN = 0,
@@ -55,6 +56,12 @@ typedef struct {
         int height;
         bool fullscreen;
     } window;
+
+    /* Persisted update preferences. */
+    struct {
+        bool check_on_startup;
+        int64_t last_checked;
+    } updates;
 
     /* Configurable action keybindings. */
     struct {

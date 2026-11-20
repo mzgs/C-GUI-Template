@@ -71,7 +71,7 @@ void chrome_draw_command_palette(app_chrome *chrome, cui_ctx *ui) {
     case 12:
         chrome->settings_section = SETTINGS_SECTION_ABOUT;
         chrome->settings_open = true;
-        chrome_check_for_updates(chrome);
+        chrome_check_for_updates(chrome, false);
         break;
     default:
         break;

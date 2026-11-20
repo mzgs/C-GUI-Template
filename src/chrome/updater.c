@@ -147,6 +147,12 @@ bool app_updater_configured(void) {
     return app_updater_valid_repo(APP_GITHUB_REPO);
 }
 
+bool app_updater_check_due(int64_t last_checked, int64_t now) {
+    if (last_checked <= 0 || now <= 0) return true;
+    if (now < last_checked) return true;
+    return (now - last_checked) >= APP_UPDATE_CHECK_INTERVAL_SEC;
+}
+
 static bool url_is_empty_releases_page(const char *url) {
     if (!url) return false;
     size_t len = strlen(url);

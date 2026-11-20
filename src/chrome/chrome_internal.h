@@ -21,7 +21,7 @@ void chrome_reset_window(app_chrome *chrome, cui_ctx *ui);
 void chrome_toggle_fullscreen(void);
 void chrome_trigger_action(app_chrome *chrome, cui_ctx *ui, app_action action);
 
-void chrome_check_for_updates(app_chrome *chrome);
+void chrome_check_for_updates(app_chrome *chrome, bool silent);
 void chrome_start_update(app_chrome *chrome, cui_ctx *ui);
 void chrome_updater_snapshot(app_chrome *chrome, app_update_snapshot *out);
 

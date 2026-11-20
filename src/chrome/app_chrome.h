@@ -37,8 +37,13 @@ typedef struct {
 
     /* Update checker state */
     struct app_updater *updater;
+    bool update_startup_checked;
     bool update_auto_checked;
+    bool update_check_pending;
+    bool update_check_silent;
+    bool update_notified;
     bool update_relaunching;
+    int update_toast_handle;
     int last_update_state;
 
     /* Internal lifecycle & persistence tracking */
@@ -56,6 +61,7 @@ typedef struct {
     bool appearance_force_motion;
     bool env_theme_override;
     bool env_accent_override;
+    bool env_screenshot_mode;
 #ifdef __APPLE__
     int pending_action;
     cui_key pending_edit_key;
