@@ -134,7 +134,10 @@ bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity
 #else
         DWORD access_type = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
 #endif
-        session = WinHttpOpen(L"C-GUI-Template", access_type,
+        wchar_t user_agent[256] = L"CUIApp";
+        MultiByteToWideChar(CP_UTF8, 0, APP_NAME "/" APP_VERSION, -1, user_agent,
+                            (int)(sizeof user_agent / sizeof user_agent[0]));
+        session = WinHttpOpen(user_agent, access_type,
                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (!session) {
             win32_set_err(err, err_cap, "Could not initialize HTTP client.");

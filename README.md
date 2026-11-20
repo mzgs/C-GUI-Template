@@ -108,21 +108,25 @@ To keep a consistent signature across updates (so macOS preserves granted permis
 
 When those files exist and `gh` is logged in (`gh auth login`), `./release.sh` automatically uploads `MACOS_CERT_P12` and `MACOS_CERT_PASSWORD` to the current GitHub repo on the first release—so new apps forked from this template get signed automatically with zero manual secret setup. You can also set the two secrets manually in GitHub Actions settings. Works with either a free self-signed Code Signing `.p12` or an Apple Developer ID `.p12`; set a unique `APP_BUNDLE_ID` in `CMakeLists.txt` per app.
 
-## First-time setup (new project checklist)
+## First-time setup (new project)
 
-When creating a new project from this template, update these places first:
+Run the bootstrap script to configure `CMakeLists.txt`, `install.sh`, `README.md`, and `AGENTS.md` in one step (safe to re-run later, or pass `--dry-run` to preview):
 
-1. **`CMakeLists.txt`** — set your app identity and starting version:
-   - `project(<your_project> VERSION 0.1.0 LANGUAGES C)` — rename the CMake project and reset `VERSION`.
-   - `APP_NAME` — display name for the window title, macOS `.app` bundle, and per-user settings folder.
-   - `APP_DESCRIPTION`, `APP_AUTHOR`, `APP_COPYRIGHT` — metadata used in **Settings → About**, macOS `Info.plist`, Windows `VS_VERSION_INFO`, and the Linux `.desktop` entry.
-   - `APP_BUNDLE_ID` — unique reverse-DNS identifier (e.g. `com.yourname.my-app`) used for macOS signing/permissions and Linux desktop/icon matching.
-   - `APP_GITHUB_REPO` — your `"owner/repo"` slug for **Settings → About** update checks (or `""` to disable).
-   - *(Optional)* Rename the `empty_gui` target in `CMakeLists.txt` if you want a custom Linux/Windows executable name (keep `cui_app_target(...)` and `cui::cui`).
-2. **App icon (`resources/`)** — replace `resources/app.png` (1024×1024 PNG) with your own icon, then run `./resources/generate_icons.sh` on macOS (or replace `resources/app.icns` and `resources/app.ico` directly).
-3. **`install.sh` & `README.md`**:
-   - In `install.sh`, change `REPO="${REPO:-mzgs/C-GUI-Template}"` (and the usage comments) to your `"owner/repo"`.
-   - In `README.md`, update the title, description, and `install.sh` `curl` URL to your repository.
-4. **Verify build & first release**:
+```sh
+./init.sh
+```
+
+Or non-interactively with flags:
+
+```sh
+./init.sh --name "My Notes" --repo "alice/my-notes" --yes
+```
+
+`init.sh` auto-detects defaults from your git remote (`origin`) and `git config user.name`, sets `APP_NAME`, `APP_DESCRIPTION`, `APP_AUTHOR`, `APP_COPYRIGHT`, `APP_BUNDLE_ID`, `APP_GITHUB_REPO` (pass `--repo ""` to disable updates), renames the CMake project and executable target, resets `VERSION` to `0.1.0`, and clears any stale `build/CMakeCache.txt`.
+
+Then finish setup:
+
+1. **App icon (`resources/`)** — replace `resources/app.png` (1024×1024 PNG) with your own icon, then run `./resources/generate_icons.sh` on macOS (or replace `resources/app.icns` and `resources/app.ico` directly).
+2. **Verify build & first release**:
    - Build and run locally (`./run.sh` on macOS, or `cmake -S . -B build && cmake --build build`) and run `ctest --test-dir build --output-on-failure`.
    - Ensure GitHub Actions is enabled for the new repo (and optionally configure `~/.macos-codesign/` + `gh auth login` for macOS code signing), then run `./release.sh 0.1.0` when ready for your first release.
