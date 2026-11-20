@@ -15,12 +15,68 @@ enum {
     SETTINGS_SECTION_COUNT
 };
 
+enum {
+    APP_MAX_ACTIONS = 60,
+    APP_MAX_PALETTE_COMMANDS = 128,
+    APP_ACTION_GROUP_MAX = 64,
+    APP_ACTION_ICON_MAX = 16,
+};
+
+typedef enum {
+    APP_MENU_NONE = 0,
+    APP_MENU_FILE,
+    APP_MENU_EDIT,
+    APP_MENU_VIEW,
+} app_menu_group;
+
 typedef struct {
     const char *settings_path;
     bool software_renderer;
 } app_cli_opts;
 
-typedef void (*app_action_handler)(cui_ctx *ui, app_action action, void *user);
+typedef void (*app_action_fn)(cui_ctx *ui, void *user);
+
+typedef struct {
+    const char *id;              /* Stable unique ID for lookup & keybinding persistence (e.g. "save"). */
+    const char *title;           /* Display label in Command Palette, Keybindings, and menus (required). */
+    const char *icon;            /* Optional CUI_ICON_* for Command Palette and Windows/Linux menus. */
+    const char *group;           /* Optional Command Palette group (defaults to "Actions"). */
+    app_menu_group menu;         /* Optional top-level menu placement (default APP_MENU_NONE). */
+    cui_key_combo default_combo; /* Default keyboard shortcut, or {0} for unbound. */
+    bool hide_from_palette;      /* Omit from Command Palette when true. */
+    bool hide_from_keybindings;  /* Omit from Settings -> Keybindings & persistence when true. */
+    bool disabled;               /* Initial disabled state (toggleable via app_chrome_set_action_enabled). */
+    bool checked;                /* Initial menu checkmark state (toggleable via app_chrome_set_action_checked). */
+    app_action_fn on_trigger;    /* Callback invoked when triggered via shortcut, menu, or palette. */
+    void *user;                  /* Per-action user pointer (overrides default_user when non-NULL). */
+} app_action_desc;
+
+typedef struct {
+    char id[APP_KEYBINDING_ID_MAX];
+    char title[APP_KEYBINDING_LABEL_MAX];
+    char icon[APP_ACTION_ICON_MAX];
+    char group[APP_ACTION_GROUP_MAX];
+    app_menu_group menu;
+    cui_key_combo default_combo;
+    int keybinding_index;        /* Index into app_settings.keybindings, or -1 if not keybindable. */
+    bool hide_from_palette;
+    bool enabled;
+    bool checked;
+    app_action_fn on_trigger;
+    void *user;
+} app_registered_action;
+
+typedef struct {
+    const char *title;           /* Command title shown & searched in the palette (required). */
+    const char *icon;            /* Optional CUI_ICON_*. */
+    const char *group;           /* Optional group heading (defaults to "Actions"). */
+    const char *shortcut;        /* Optional shortcut hint label. */
+    app_action_fn on_trigger;    /* Callback invoked when chosen. */
+    void *user;                  /* Optional user pointer (defaults to provider user when NULL). */
+} app_palette_command;
+
+typedef struct app_palette_builder app_palette_builder;
+typedef void (*app_palette_provider)(app_palette_builder *builder, void *user);
 
 struct app_updater;
 
@@ -34,6 +90,13 @@ typedef struct {
     bool palette_open;
     int settings_section;
     char keybinding_filter[128];
+
+    /* Registered app actions & dynamic Command Palette provider */
+    app_registered_action actions[APP_MAX_ACTIONS];
+    int action_count;
+    int command_palette_kb;
+    app_palette_provider palette_provider;
+    void *palette_provider_user;
 
     /* Update checker state */
     struct app_updater *updater;
@@ -67,16 +130,24 @@ typedef struct {
     cui_key pending_edit_key;
     cui_key injected_edit_key;
 #endif
-
-    /* Action callback */
-    app_action_handler on_action;
-    void *on_action_user;
 } app_chrome;
 
 /* Parse CLI, load settings, and initialize chrome. Returns false when the app should exit with *exit_code. */
 bool app_chrome_init(app_chrome *chrome, int argc, char **argv, int *exit_code);
 cui_app_desc app_chrome_app_desc(const app_chrome *chrome);
-void app_chrome_set_action_handler(app_chrome *chrome, app_action_handler handler, void *user);
+
+/* Register app actions (automatically wired into shortcuts, Keybindings, Command Palette, and menus). */
+bool app_chrome_register_action(app_chrome *chrome, const app_action_desc *desc);
+int app_chrome_register_actions(app_chrome *chrome, const app_action_desc *descs,
+                                size_t count, void *default_user);
+bool app_chrome_trigger_action(app_chrome *chrome, cui_ctx *ui, const char *id);
+bool app_chrome_set_action_enabled(app_chrome *chrome, const char *id, bool enabled);
+bool app_chrome_set_action_checked(app_chrome *chrome, const char *id, bool checked);
+
+/* Optional provider called while the Command Palette is open to inject dynamic commands. */
+void app_chrome_set_palette_provider(app_chrome *chrome,
+                                     app_palette_provider provider, void *user);
+bool app_palette_add(app_palette_builder *builder, const app_palette_command *cmd);
 
 /* Call at the start and end of frame() around your application UI. */
 void app_chrome_begin_frame(app_chrome *chrome, cui_ctx *ui);

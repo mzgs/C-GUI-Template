@@ -1,10 +1,20 @@
 #import <Cocoa/Cocoa.h>
 #include <cui/cui_app.h>
+#include <string.h>
 #include "app_menu.h"
 
 static bool combo_equal(cui_key_combo a, cui_key_combo b) {
     return a.key == b.key && a.mods == b.mods;
 }
+
+typedef struct {
+    int action_index;
+    app_menu_group menu;
+    char title[APP_KEYBINDING_LABEL_MAX];
+    cui_key_combo combo;
+    bool enabled;
+    bool checked;
+} cached_menu_action;
 
 static NSString *macos_key_equivalent(cui_key key, bool *is_function_key) {
     *is_function_key = false;
@@ -70,22 +80,32 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
     if (force || !combo_equal(prev, next)) macos_apply_key_combo(item, next);
 }
 
-@interface AppMenuTarget : NSObject <NSMenuItemValidation>
+@interface AppMenuTarget : NSObject <NSMenuItemValidation> {
+@public
+    cached_menu_action _cachedActions[APP_MAX_ACTIONS];
+    int _cachedActionCount;
+}
 @property(nonatomic, assign) bool *settingsOpen;
 @property(nonatomic, assign) int *settingsSection;
 @property(nonatomic, assign) int aboutSection;
 @property(nonatomic, assign) bool *paletteOpen;
 @property(nonatomic, assign) void *user;
-@property(nonatomic, assign) void (*onAction)(app_action action, void *user);
+@property(nonatomic, assign) void (*onAction)(int action_index, void *user);
 @property(nonatomic, assign) void (*onEditKey)(cui_key key, void *user);
 @property(nonatomic, assign) void (*onToggleFullscreen)(void *user);
 @property(nonatomic, assign) void (*onWillTerminate)(void *user);
-@property(nonatomic, strong) NSMenuItem *saveItem;
-@property(nonatomic, strong) NSMenuItem *findItem;
+@property(nonatomic, strong) NSMenuItem *fileMenuItem;
+@property(nonatomic, strong) NSMenu *fileMenu;
+@property(nonatomic, strong) NSMenu *editMenu;
+@property(nonatomic, strong) NSMenu *viewMenu;
+@property(nonatomic, assign) NSInteger editStaticCount;
+@property(nonatomic, assign) NSInteger viewStaticCount;
+@property(nonatomic, strong) NSMutableArray<NSMenuItem *> *dynamicItems;
 @property(nonatomic, strong) NSMenuItem *paletteItem;
 @property(nonatomic, strong) NSMenuItem *fullscreenItem;
 @property(nonatomic, assign) bool hasSyncedState;
-@property(nonatomic, assign) app_menu_state lastState;
+@property(nonatomic, assign) cui_key_combo lastPaletteCombo;
+@property(nonatomic, assign) bool lastFullscreen;
 - (void)showAbout:(id)sender;
 - (void)showSettings:(id)sender;
 - (void)triggerAction:(NSMenuItem *)sender;
@@ -97,6 +117,14 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
 @end
 
 @implementation AppMenuTarget
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _dynamicItems = [NSMutableArray array];
+    }
+    return self;
+}
+
 - (void)applyHooks:(const app_menu_hooks *)hooks {
     self.settingsOpen = hooks->settings_open;
     self.settingsSection = hooks->settings_section;
@@ -130,7 +158,7 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
 }
 
 - (void)triggerAction:(NSMenuItem *)sender {
-    if (self.onAction) self.onAction((app_action)sender.tag, self.user);
+    if (self.onAction) self.onAction((int)sender.tag, self.user);
     [self requestRedraw];
 }
 
@@ -156,7 +184,14 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
     if (item.action == @selector(triggerAction:)) {
         bool blocked = (self.settingsOpen && *self.settingsOpen) ||
                        (self.paletteOpen && *self.paletteOpen);
-        return !blocked;
+        if (blocked) return NO;
+        int tag = (int)item.tag;
+        for (int i = 0; i < _cachedActionCount; ++i) {
+            if (_cachedActions[i].action_index == tag) {
+                return _cachedActions[i].enabled ? YES : NO;
+            }
+        }
+        return NO;
     }
     return YES;
 }
@@ -190,6 +225,12 @@ static NSMenuItem *make_submenu_item(NSString *title, NSMenu *submenu) {
     return item;
 }
 
+static void trim_menu_to_count(NSMenu *menu, NSInteger count) {
+    while (menu.numberOfItems > count) {
+        [menu removeItemAtIndex:menu.numberOfItems - 1];
+    }
+}
+
 void app_menu_install(const app_menu_hooks *hooks) {
     if (!hooks || !hooks->settings_open) return;
     if (shared_menu_target) {
@@ -214,13 +255,14 @@ void app_menu_install(const app_menu_hooks *hooks) {
     [appMenu insertItem:settings atIndex:2];
     [appMenu insertItem:[NSMenuItem separatorItem] atIndex:3];
 
-    /* File menu */
+    /* File menu (populated dynamically from registered APP_MENU_FILE actions) */
     NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
-    target.saveItem = make_item(@"Save", @selector(triggerAction:), @"s",
-                                NSEventModifierFlagCommand, target, APP_ACTION_SAVE);
-    [fileMenu addItem:target.saveItem];
+    NSMenuItem *fileMenuItem = make_submenu_item(@"File", fileMenu);
+    fileMenuItem.hidden = YES;
+    target.fileMenu = fileMenu;
+    target.fileMenuItem = fileMenuItem;
 
-    /* Edit menu */
+    /* Edit menu (standard clipboard items + dynamic APP_MENU_EDIT actions) */
     NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
     [editMenu addItem:make_item(@"Cut", @selector(triggerEditKey:), @"x",
                                 NSEventModifierFlagCommand, target, CUI_KEY_X)];
@@ -230,12 +272,10 @@ void app_menu_install(const app_menu_hooks *hooks) {
                                 NSEventModifierFlagCommand, target, CUI_KEY_V)];
     [editMenu addItem:make_item(@"Select All", @selector(triggerEditKey:), @"a",
                                 NSEventModifierFlagCommand, target, CUI_KEY_A)];
-    [editMenu addItem:[NSMenuItem separatorItem]];
-    target.findItem = make_item(@"Find", @selector(triggerAction:), @"f",
-                                NSEventModifierFlagCommand, target, APP_ACTION_FIND);
-    [editMenu addItem:target.findItem];
+    target.editMenu = editMenu;
+    target.editStaticCount = editMenu.numberOfItems;
 
-    /* View menu */
+    /* View menu (Command Palette + Fullscreen + dynamic APP_MENU_VIEW actions) */
     NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
     target.paletteItem = make_item(@"Command Palette…", @selector(triggerPalette:), @"k",
                                    NSEventModifierFlagCommand, target, 0);
@@ -244,9 +284,11 @@ void app_menu_install(const app_menu_hooks *hooks) {
     target.fullscreenItem = make_item(@"Enter Full Screen", @selector(toggleFullscreen:), @"f",
                                       NSEventModifierFlagCommand | NSEventModifierFlagControl, target, 0);
     [viewMenu addItem:target.fullscreenItem];
+    target.viewMenu = viewMenu;
+    target.viewStaticCount = viewMenu.numberOfItems;
 
     NSInteger insertAt = bar.numberOfItems > 1 ? 1 : bar.numberOfItems;
-    [bar insertItem:make_submenu_item(@"File", fileMenu) atIndex:insertAt];
+    [bar insertItem:fileMenuItem atIndex:insertAt];
     [bar insertItem:make_submenu_item(@"Edit", editMenu) atIndex:insertAt + 1];
     [bar insertItem:make_submenu_item(@"View", viewMenu) atIndex:insertAt + 2];
 
@@ -275,12 +317,101 @@ void app_menu_sync(const app_menu_state *state) {
     if (!shared_menu_target || !state) return;
     AppMenuTarget *target = shared_menu_target;
     bool force = !target.hasSyncedState;
-    sync_combo_item(target.saveItem, target.lastState.save_combo, state->save_combo, force);
-    sync_combo_item(target.findItem, target.lastState.find_combo, state->find_combo, force);
-    sync_combo_item(target.paletteItem, target.lastState.palette_combo, state->palette_combo, force);
-    if (force || target.lastState.fullscreen != state->fullscreen) {
+
+    sync_combo_item(target.paletteItem, target.lastPaletteCombo, state->palette_combo, force);
+    if (force || target.lastFullscreen != state->fullscreen) {
         target.fullscreenItem.title = state->fullscreen ? @"Exit Full Screen" : @"Enter Full Screen";
     }
-    target.lastState = *state;
+    target.lastPaletteCombo = state->palette_combo;
+    target.lastFullscreen = state->fullscreen;
+
+    int count = state->action_count;
+    if (count < 0) count = 0;
+    if (count > APP_MAX_ACTIONS) count = APP_MAX_ACTIONS;
+
+    bool structureChanged = force || (count != target->_cachedActionCount);
+    if (!structureChanged) {
+        for (int i = 0; i < count; ++i) {
+            const app_menu_action *a = &state->actions[i];
+            const cached_menu_action *c = &target->_cachedActions[i];
+            const char *title = a->title ? a->title : "";
+            if (a->action_index != c->action_index ||
+                a->menu != c->menu ||
+                strcmp(title, c->title) != 0) {
+                structureChanged = true;
+                break;
+            }
+        }
+    }
+
+    if (structureChanged) {
+        @autoreleasepool {
+            trim_menu_to_count(target.fileMenu, 0);
+            trim_menu_to_count(target.editMenu, target.editStaticCount);
+            trim_menu_to_count(target.viewMenu, target.viewStaticCount);
+            [target.dynamicItems removeAllObjects];
+
+            bool editHasSep = false;
+            bool viewHasSep = false;
+            int kept = 0;
+            for (int i = 0; i < count; ++i) {
+                const app_menu_action *a = &state->actions[i];
+                NSMenu *dest = nil;
+                if (a->menu == APP_MENU_FILE) {
+                    dest = target.fileMenu;
+                } else if (a->menu == APP_MENU_EDIT) {
+                    if (!editHasSep) {
+                        [target.editMenu addItem:[NSMenuItem separatorItem]];
+                        editHasSep = true;
+                    }
+                    dest = target.editMenu;
+                } else if (a->menu == APP_MENU_VIEW) {
+                    if (!viewHasSep) {
+                        [target.viewMenu addItem:[NSMenuItem separatorItem]];
+                        viewHasSep = true;
+                    }
+                    dest = target.viewMenu;
+                }
+                if (!dest) continue;
+
+                const char *title = a->title ? a->title : "";
+                NSString *nsTitle = [NSString stringWithUTF8String:title] ?: @"";
+                NSMenuItem *item = make_item(nsTitle, @selector(triggerAction:), @"", 0,
+                                             target, a->action_index);
+                macos_apply_key_combo(item, a->combo);
+                item.state = a->checked ? NSControlStateValueOn : NSControlStateValueOff;
+                [dest addItem:item];
+                [target.dynamicItems addObject:item];
+
+                cached_menu_action *c = &target->_cachedActions[kept++];
+                c->action_index = a->action_index;
+                c->menu = a->menu;
+                snprintf(c->title, sizeof c->title, "%s", title);
+                c->combo = a->combo;
+                c->enabled = a->enabled;
+                c->checked = a->checked;
+            }
+            target->_cachedActionCount = kept;
+            target.fileMenuItem.hidden = (target.fileMenu.numberOfItems == 0);
+        }
+    } else {
+        for (int i = 0; i < target->_cachedActionCount; ++i) {
+            const app_menu_action *a = &state->actions[i];
+            cached_menu_action *c = &target->_cachedActions[i];
+            NSMenuItem *item = target.dynamicItems[(NSUInteger)i];
+            if (!combo_equal(c->combo, a->combo)) {
+                @autoreleasepool {
+                    macos_apply_key_combo(item, a->combo);
+                }
+                c->combo = a->combo;
+            }
+            if (c->checked != a->checked) {
+                item.state = a->checked ? NSControlStateValueOn : NSControlStateValueOff;
+                c->checked = a->checked;
+            }
+            c->enabled = a->enabled;
+        }
+    }
+
     target.hasSyncedState = true;
 }

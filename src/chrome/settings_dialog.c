@@ -85,7 +85,7 @@ static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) 
 
     setting_row_begin(ui, "Reset settings", compact, false);
     if (cui_confirm_button(ui, "Reset", .icon = CUI_ICON_ROTATE_CCW, .confirm_label = "Confirm")) {
-        chrome->settings = chrome_default_settings();
+        chrome_reset_settings(chrome);
         chrome_reload_appearance(chrome, ui);
         chrome_reset_window(chrome, ui);
         changed = false;
@@ -164,8 +164,8 @@ static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
                .placeholder = "Filter actions or keys...", .width = CUI_FILL);
 
     bool has_conflict = false;
-    for (int i = 0; i < APP_ACTION_COUNT; ++i) {
-        if (app_keybinding_conflict(&chrome->settings, (app_action)i) != APP_CONFLICT_NONE) {
+    for (int i = 0; i < chrome->settings.keybinding_count; ++i) {
+        if (app_keybinding_conflict(&chrome->settings, i) != APP_CONFLICT_NONE) {
             has_conflict = true;
             break;
         }
@@ -178,20 +178,19 @@ static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
 
     int visible = 0;
     cui_table(ui, "keybindings", columns, 2, .striped = true, .compact = true, .height = CUI_FILL) {
-        for (int i = 0; i < APP_ACTION_COUNT; ++i) {
-            const char *action = chrome->settings.keybindings[i].action;
-            cui_key_combo *combo = &chrome->settings.keybindings[i].combo;
-            if (!app_contains_ignore_case(action, chrome->keybinding_filter) &&
-                !app_contains_ignore_case(cui_shortcut_label(ui, *combo), chrome->keybinding_filter))
+        for (int i = 0; i < chrome->settings.keybinding_count; ++i) {
+            app_keybinding *kb = &chrome->settings.keybindings[i];
+            if (!app_contains_ignore_case(kb->label, chrome->keybinding_filter) &&
+                !app_contains_ignore_case(cui_shortcut_label(ui, kb->combo), chrome->keybinding_filter))
                 continue;
             ++visible;
-            int conflict = app_keybinding_conflict(&chrome->settings, (app_action)i);
+            int conflict = app_keybinding_conflict(&chrome->settings, i);
             cui_table_row(ui, false);
             if (conflict == APP_CONFLICT_NONE) {
-                cui_table_cell_text(ui, action);
+                cui_table_cell_text(ui, kb->label);
             } else {
                 cui_table_cell(ui);
-                cui_text(ui, action);
+                cui_text(ui, kb->label);
                 cui_badge(ui, conflict == APP_CONFLICT_SETTINGS ? "Reserved" : "Conflict",
                           .tone = CUI_TONE_WARNING, .size = CUI_SIZE_SM);
             }
@@ -199,7 +198,7 @@ static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
             cui_theme *theme = cui_theme_get(ui);
             float control_height = theme->control_md;
             theme->control_md = theme->control_sm;
-            if (cui_shortcut_recorder(ui, action, combo, .width = CUI_FILL)) changed = true;
+            if (cui_shortcut_recorder(ui, kb->id, &kb->combo, .width = CUI_FILL)) changed = true;
             theme->control_md = control_height;
         }
     }

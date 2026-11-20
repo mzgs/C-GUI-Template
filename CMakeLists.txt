@@ -178,6 +178,10 @@ if(BUILD_TESTING)
     target_link_libraries(updater_tests PRIVATE app_chrome app_common)
     add_test(NAME updater_tests COMMAND updater_tests)
 
+    add_executable(actions_tests tests/actions_tests.c)
+    target_link_libraries(actions_tests PRIVATE app_chrome app_common)
+    add_test(NAME actions_tests COMMAND actions_tests)
+
     add_test(NAME window_smoke COMMAND ${CMAKE_COMMAND} -E env
         "CUI_SCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/window-smoke.png"
         CUI_SCREENSHOT_FRAMES=1 $<TARGET_FILE:empty_gui>)

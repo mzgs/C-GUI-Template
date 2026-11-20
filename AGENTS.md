@@ -6,7 +6,7 @@ or dependencies.
 
 ## Layout
 
-- `main.c`: user-facing entry point (`app_state`, `on_action()`, `frame()`, `main()`).
+- `main.c`: user-facing entry point (`app_state`, `app_chrome_register_actions()`, `frame()`, `main()`).
 - `resources/`: app icons (`app.png`, `app.icns`, `app.ico`, `generate_icons.sh`) and OS metadata templates (`Info.plist.in`, `app.rc.in`, `app.desktop.in`).
 - `src/chrome/`: app chrome (`app_chrome.{h,c}`, `settings_dialog.c`, `command_palette.c`).
 - `src/log/`: thread-safe, size-capped file logging and crash signal handlers (`app_log.{h,c}`).

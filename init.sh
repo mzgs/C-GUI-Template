@@ -336,7 +336,7 @@ validate_inputs() {
         exit 2
     fi
     case "$NEW_TARGET" in
-        app_common|app_log|app_platform|app_settings|app_chrome|log_tests|updater_tests|cui|yyjson|run|all|install|test)
+        app_common|app_log|app_platform|app_settings|app_chrome|log_tests|updater_tests|actions_tests|cui|yyjson|run|all|install|test)
             echo "Target name '$NEW_TARGET' conflicts with a reserved CMake target." >&2
             exit 2
             ;;

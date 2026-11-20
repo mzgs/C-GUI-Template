@@ -140,21 +140,81 @@ bool app_settings_dir(char *out, size_t capacity, const char *override, bool cre
 #endif
 }
 
-bool app_action_pressed(cui_ctx *ui, const app_settings *settings, app_action action) {
-    if (!ui || !settings || action < 0 || action >= APP_ACTION_COUNT) return false;
+int app_settings_find_keybinding(const app_settings *settings, const char *id) {
+    if (!settings || !id || !id[0]) return -1;
+    for (int i = 0; i < settings->keybinding_count; ++i) {
+        if (strcmp(settings->keybindings[i].id, id) == 0) return i;
+    }
+    return -1;
+}
+
+static int find_deferred_keybinding(const app_settings *settings, const char *id) {
+    if (!settings || !id || !id[0]) return -1;
+    for (int i = 0; i < settings->deferred_keybinding_count; ++i) {
+        if (strcmp(settings->deferred_keybindings[i].id, id) == 0) return i;
+    }
+    return -1;
+}
+
+int app_settings_register_keybinding(app_settings *settings, const char *id,
+                                     const char *label, cui_key_combo default_combo) {
+    if (!settings || !id || !id[0] || !label || !label[0]) return -1;
+    size_t id_len = strlen(id);
+    size_t label_len = strlen(label);
+    if (id_len >= APP_KEYBINDING_ID_MAX || label_len >= APP_KEYBINDING_LABEL_MAX) return -1;
+    if (default_combo.key == CUI_KEY_NONE) default_combo.mods = 0;
+
+    int existing = app_settings_find_keybinding(settings, id);
+    if (existing >= 0) {
+        memcpy(settings->keybindings[existing].label, label, label_len + 1);
+        settings->keybindings[existing].default_combo = default_combo;
+        return existing;
+    }
+    if (settings->keybinding_count >= APP_MAX_KEYBINDINGS) return -1;
+
+    cui_key_combo combo = default_combo;
+    int deferred = find_deferred_keybinding(settings, id);
+    if (deferred >= 0) {
+        combo = settings->deferred_keybindings[deferred].combo;
+        --settings->deferred_keybinding_count;
+        if (deferred < settings->deferred_keybinding_count) {
+            settings->deferred_keybindings[deferred] =
+                settings->deferred_keybindings[settings->deferred_keybinding_count];
+        }
+    }
+
+    int index = settings->keybinding_count++;
+    app_keybinding *kb = &settings->keybindings[index];
+    memcpy(kb->id, id, id_len + 1);
+    memcpy(kb->label, label, label_len + 1);
+    kb->combo = combo;
+    kb->default_combo = default_combo;
+    return index;
+}
+
+void app_settings_reset_keybindings(app_settings *settings) {
+    if (!settings) return;
+    for (int i = 0; i < settings->keybinding_count; ++i) {
+        settings->keybindings[i].combo = settings->keybindings[i].default_combo;
+    }
+    settings->deferred_keybinding_count = 0;
+}
+
+bool app_keybinding_pressed(cui_ctx *ui, const app_settings *settings, int index) {
+    if (!ui || !settings || index < 0 || index >= settings->keybinding_count) return false;
     if (cui_wants_keyboard(ui)) return false;
-    cui_key_combo combo = settings->keybindings[action].combo;
+    cui_key_combo combo = settings->keybindings[index].combo;
     return combo.key != CUI_KEY_NONE && cui_shortcut(ui, combo.mods, combo.key);
 }
 
-int app_keybinding_conflict(const app_settings *settings, app_action action) {
-    if (!settings || action < 0 || action >= APP_ACTION_COUNT) return APP_CONFLICT_NONE;
-    cui_key_combo combo = settings->keybindings[action].combo;
+int app_keybinding_conflict(const app_settings *settings, int index) {
+    if (!settings || index < 0 || index >= settings->keybinding_count) return APP_CONFLICT_NONE;
+    cui_key_combo combo = settings->keybindings[index].combo;
     if (combo.key == CUI_KEY_NONE) return APP_CONFLICT_NONE;
     if (combo.key == CUI_KEY_COMMA && combo.mods == CUI_MOD_PRIMARY)
         return APP_CONFLICT_SETTINGS;
-    for (int i = 0; i < APP_ACTION_COUNT; ++i) {
-        if (i == (int)action) continue;
+    for (int i = 0; i < settings->keybinding_count; ++i) {
+        if (i == index) continue;
         cui_key_combo other = settings->keybindings[i].combo;
         if (other.key == combo.key && other.mods == combo.mods) return i;
     }
@@ -411,17 +471,38 @@ bool app_settings_load(app_settings *settings, const char *override) {
 
     yyjson_val *keybindings = yyjson_obj_get(root, "keybindings");
     if (yyjson_is_obj(keybindings)) {
-        for (int i = 0; i < APP_ACTION_COUNT; ++i) {
-            yyjson_val *entry = yyjson_obj_get(keybindings, loaded.keybindings[i].id);
-            if (!yyjson_is_obj(entry)) continue;
+        size_t idx = 0, max = 0;
+        yyjson_val *key_val = NULL, *entry = NULL;
+        yyjson_obj_foreach(keybindings, idx, max, key_val, entry) {
+            size_t id_len = 0;
+            const char *id = json_cstr(key_val, &id_len);
+            if (!id || id_len == 0 || id_len >= APP_KEYBINDING_ID_MAX || !yyjson_is_obj(entry))
+                continue;
             cui_key key = CUI_KEY_NONE;
             int mods = 0;
             yyjson_val *mods_val = yyjson_obj_get(entry, "mods");
             bool mods_ok = mods_val ? parse_mods(mods_val, &mods) : true;
-            if (parse_key(yyjson_obj_get(entry, "key"), &key) && mods_ok &&
-                (key != CUI_KEY_NONE || mods == 0)) {
-                loaded.keybindings[i].combo = (cui_key_combo){ mods, key };
+            if (!parse_key(yyjson_obj_get(entry, "key"), &key) || !mods_ok ||
+                (key == CUI_KEY_NONE && mods != 0)) {
+                continue;
+            }
+            cui_key_combo combo = { mods, key };
+            int existing = app_settings_find_keybinding(&loaded, id);
+            if (existing >= 0) {
+                loaded.keybindings[existing].combo = combo;
                 applied = true;
+            } else if (loaded.defer_unknown_keybindings) {
+                int def_idx = find_deferred_keybinding(&loaded, id);
+                if (def_idx >= 0) {
+                    loaded.deferred_keybindings[def_idx].combo = combo;
+                    applied = true;
+                } else if (loaded.deferred_keybinding_count < APP_MAX_KEYBINDINGS) {
+                    app_deferred_keybinding *def =
+                        &loaded.deferred_keybindings[loaded.deferred_keybinding_count++];
+                    memcpy(def->id, id, id_len + 1);
+                    def->combo = combo;
+                    applied = true;
+                }
             }
         }
     }
@@ -476,7 +557,7 @@ bool app_settings_save(const app_settings *settings, const char *override) {
 
     yyjson_mut_val *keybindings = ok ? yyjson_mut_obj(doc) : NULL;
     ok = ok && keybindings && yyjson_mut_obj_add_val(doc, root, "keybindings", keybindings);
-    for (int i = 0; ok && i < APP_ACTION_COUNT; ++i) {
+    for (int i = 0; ok && i < settings->keybinding_count; ++i) {
         cui_key_combo combo = settings->keybindings[i].combo;
         char mods_buf[32];
         format_mods(combo.mods, mods_buf, sizeof mods_buf);
