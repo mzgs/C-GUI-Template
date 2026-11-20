@@ -105,3 +105,21 @@ To keep a consistent signature across updates (so macOS preserves granted permis
 ```
 
 When those files exist and `gh` is logged in (`gh auth login`), `./release.sh` automatically uploads `MACOS_CERT_P12` and `MACOS_CERT_PASSWORD` to the current GitHub repo on the first release—so new apps forked from this template get signed automatically with zero manual secret setup. You can also set the two secrets manually in GitHub Actions settings. Works with either a free self-signed Code Signing `.p12` or an Apple Developer ID `.p12`; set a unique `APP_BUNDLE_ID` in `CMakeLists.txt` per app.
+
+## First-time setup (new project checklist)
+
+When creating a new project from this template, update these places first:
+
+1. **`CMakeLists.txt`** — set your app identity and starting version:
+   - `project(<your_project> VERSION 0.1.0 LANGUAGES C)` — rename the CMake project and reset `VERSION`.
+   - `APP_NAME` — display name for the window title, macOS `.app` bundle, and per-user settings folder.
+   - `APP_BUNDLE_ID` — unique reverse-DNS macOS bundle identifier (e.g. `com.yourname.my-app`) so macOS signing and permissions don't collide with other apps.
+   - `APP_GITHUB_REPO` — your `"owner/repo"` slug for **Settings → About** update checks (or `""` to disable).
+   - *(Optional)* Rename the `empty_gui` target in `CMakeLists.txt` if you want a custom Linux/Windows executable name (keep `cui_app_target(...)` and `cui::cui`).
+2. **`install.sh`** — change `REPO="${REPO:-mzgs/C-GUI-Template}"` (and the usage comments) to your `"owner/repo"`.
+3. **App info & docs**:
+   - `src/chrome/settings_dialog.c` (`draw_about_section`) — update the About description text.
+   - `README.md` — update the title, description, and `install.sh` `curl` URL to your repository.
+4. **Verify build & first release**:
+   - Build and run locally (`./run.sh` on macOS, or `cmake -S . -B build && cmake --build build`) and run `ctest --test-dir build --output-on-failure`.
+   - Ensure GitHub Actions is enabled for the new repo (and optionally configure `~/.macos-codesign/` + `gh auth login` for macOS code signing), then run `./release.sh 0.1.0` when ready for your first release.
