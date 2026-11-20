@@ -7,8 +7,24 @@ project(c_gui_template VERSION 0.1.7 LANGUAGES C)
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(APP_NAME "C GUI Template" CACHE STRING "App name used for the window and settings folder")
-set(APP_BUNDLE_ID "com.example.c-gui-template" CACHE STRING "macOS bundle identifier (CFBundleIdentifier)")
+set(APP_DESCRIPTION "A C99 desktop app built with Better-C-UI." CACHE STRING "Short app description for OS metadata and About")
+set(APP_AUTHOR "Example" CACHE STRING "Publisher / author name for OS executable metadata")
+set(APP_COPYRIGHT "" CACHE STRING "Optional copyright notice for macOS Info.plist and Windows version info")
+set(APP_BUNDLE_ID "com.example.c-gui-template" CACHE STRING "Reverse-DNS app identifier (macOS CFBundleIdentifier, Linux desktop/icon ID)")
 set(APP_GITHUB_REPO "mzgs/C-GUI-Template" CACHE STRING "GitHub owner/repo for update checks (empty to disable)")
+
+function(app_escape_xml out_var value)
+    string(REPLACE "&" "&amp;" value "${value}")
+    string(REPLACE "<" "&lt;" value "${value}")
+    string(REPLACE ">" "&gt;" value "${value}")
+    set(${out_var} "${value}" PARENT_SCOPE)
+endfunction()
+
+function(app_escape_rc out_var value)
+    string(REPLACE "\\" "\\\\" value "${value}")
+    string(REPLACE "\"" "\\\"" value "${value}")
+    set(${out_var} "${value}" PARENT_SCOPE)
+endfunction()
 
 find_package(Threads REQUIRED)
 
@@ -24,6 +40,8 @@ FetchContent_MakeAvailable(cui yyjson)
 add_library(app_common INTERFACE)
 target_compile_definitions(app_common INTERFACE
     "APP_NAME=\"${APP_NAME}\""
+    "APP_DESCRIPTION=\"${APP_DESCRIPTION}\""
+    "APP_BUNDLE_ID=\"${APP_BUNDLE_ID}\""
     "APP_VERSION=\"${PROJECT_VERSION}\""
     "APP_GITHUB_REPO=\"${APP_GITHUB_REPO}\"")
 if(MSVC)
@@ -74,14 +92,76 @@ install(TARGETS empty_gui
     BUNDLE DESTINATION . COMPONENT app
     RUNTIME DESTINATION . COMPONENT app)
 if(APPLE)
+    set(APP_OSX_MIN_VERSION "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    if(NOT APP_OSX_MIN_VERSION)
+        set(APP_OSX_MIN_VERSION "12.0")
+    endif()
+    app_escape_xml(APP_PLIST_NAME "${APP_NAME}")
+    app_escape_xml(APP_PLIST_BUNDLE_ID "${APP_BUNDLE_ID}")
+    app_escape_xml(APP_PLIST_COPYRIGHT "${APP_COPYRIGHT}")
+    configure_file(resources/Info.plist.in "${CMAKE_CURRENT_BINARY_DIR}/Info.plist.in" @ONLY)
+
+    set(APP_MACOS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.icns")
+    set_source_files_properties("${APP_MACOS_ICON}" PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources")
+    target_sources(empty_gui PRIVATE "${APP_MACOS_ICON}")
+
     set_target_properties(empty_gui PROPERTIES
         OUTPUT_NAME "${APP_NAME}"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist.in"
         MACOSX_BUNDLE_BUNDLE_NAME "${APP_NAME}"
+        MACOSX_BUNDLE_ICON_FILE "app.icns"
         MACOSX_BUNDLE_GUI_IDENTIFIER "${APP_BUNDLE_ID}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
     add_custom_target(run COMMAND $<TARGET_FILE:empty_gui> DEPENDS empty_gui
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" USES_TERMINAL VERBATIM)
+elseif(WIN32)
+    set(APP_VER_MAJOR "${PROJECT_VERSION_MAJOR}")
+    set(APP_VER_MINOR "${PROJECT_VERSION_MINOR}")
+    set(APP_VER_PATCH "${PROJECT_VERSION_PATCH}")
+    set(APP_VER_TWEAK "${PROJECT_VERSION_TWEAK}")
+    if("${APP_VER_MAJOR}" STREQUAL "")
+        set(APP_VER_MAJOR 0)
+    endif()
+    if("${APP_VER_MINOR}" STREQUAL "")
+        set(APP_VER_MINOR 0)
+    endif()
+    if("${APP_VER_PATCH}" STREQUAL "")
+        set(APP_VER_PATCH 0)
+    endif()
+    if("${APP_VER_TWEAK}" STREQUAL "")
+        set(APP_VER_TWEAK 0)
+    endif()
+    get_target_property(APP_WIN32_OUTPUT_NAME empty_gui OUTPUT_NAME)
+    if(NOT APP_WIN32_OUTPUT_NAME)
+        set(APP_WIN32_OUTPUT_NAME "empty_gui")
+    endif()
+    app_escape_rc(APP_RC_NAME "${APP_NAME}")
+    app_escape_rc(APP_RC_DESCRIPTION "${APP_DESCRIPTION}")
+    app_escape_rc(APP_RC_AUTHOR "${APP_AUTHOR}")
+    app_escape_rc(APP_RC_COPYRIGHT "${APP_COPYRIGHT}")
+    app_escape_rc(APP_RC_TARGET "${APP_WIN32_OUTPUT_NAME}")
+    set(APP_WIN32_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.ico")
+    app_escape_rc(APP_RC_ICON_PATH "${APP_WIN32_ICON}")
+    configure_file(resources/app.rc.in "${CMAKE_CURRENT_BINARY_DIR}/app.rc" @ONLY)
+    set_source_files_properties("${CMAKE_CURRENT_BINARY_DIR}/app.rc" PROPERTIES
+        OBJECT_DEPENDS "${APP_WIN32_ICON}")
+    target_sources(empty_gui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/app.rc")
+else()
+    get_target_property(APP_LINUX_OUTPUT_NAME empty_gui OUTPUT_NAME)
+    if(NOT APP_LINUX_OUTPUT_NAME)
+        set(APP_LINUX_OUTPUT_NAME "empty_gui")
+    endif()
+    set(APP_DESKTOP_NAME "${APP_NAME}")
+    set(APP_DESKTOP_DESCRIPTION "${APP_DESCRIPTION}")
+    set(APP_EXEC_NAME "${APP_LINUX_OUTPUT_NAME}")
+    configure_file(resources/app.desktop.in "${CMAKE_CURRENT_BINARY_DIR}/${APP_BUNDLE_ID}.desktop" @ONLY)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${APP_BUNDLE_ID}.desktop"
+        DESTINATION share/applications COMPONENT app)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.png"
+        DESTINATION share/icons/hicolor/512x512/apps
+        RENAME "${APP_BUNDLE_ID}.png" COMPONENT app)
 endif()
 
 include(CTest)

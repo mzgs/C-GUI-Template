@@ -309,6 +309,7 @@ static void sync_window_state(app_chrome *chrome, cui_ctx *ui) {
     if (chrome->window_state_ui != ui) {
         chrome->window_state_ui = ui;
         chrome->window_fullscreen_pending = false;
+        app_window_apply_metadata(cui_app_native_window(NULL), cui_app_backend(NULL));
         if (chrome->settings.window.has_pos) {
             app_window_set_pos(cui_app_native_window(NULL), cui_app_backend(NULL),
                                chrome->settings.window.x, chrome->settings.window.y);

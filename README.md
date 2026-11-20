@@ -17,6 +17,7 @@ app without recompiling. A failed build stops the script before launch.
 
 ```text
 main.c                 App entry point (state, action handler, frame UI)
+resources/             App icons (app.png, app.icns, app.ico) & OS metadata templates
 src/
   chrome/              Lifecycle, CLI parsing, Settings dialog, Command Palette
   settings/            JSON persistence, atomic writes, keybinding dispatch & conflicts
@@ -26,6 +27,7 @@ src/
 ## Built-in features
 
 - **Clean app entry point**: `main.c` stays minimal—wrap your UI between `app_chrome_begin_frame()` and `app_chrome_end_frame()` and handle actions in `on_action()`.
+- **App icons & OS metadata**: Ships with default icons and platform packaging wired in `CMakeLists.txt`—macOS `Info.plist` + `app.icns` (Retina + automatic graphics switching), Windows `app.ico` + `VS_VERSION_INFO` executable metadata, and Linux `.desktop` entry + icon (`WM_CLASS` matched to `APP_BUNDLE_ID`). Replace `resources/app.png` and run `./resources/generate_icons.sh` on macOS to regenerate `.icns` and `.ico`.
 - **Native & cross-platform menu bar**: On macOS, native **App** (**About**, **Settings…** `⌘,`), **File** (**Save**), **Edit** (**Cut**, **Copy**, **Paste**, **Select All**, **Find**), **View** (**Command Palette…**, **Enter/Exit Full Screen** `⌃⌘F`), and **Window** menus stay dynamically synced with your keybindings. On Windows and Linux, the top menu bar provides **File**, **Edit**, **View**, and **Help** (plus **Ctrl+,** for Settings and **F11** for Fullscreen).
 - **Appearance preferences**: Persisted theme mode (**System**, **Light**, **Dark**), accent color, text scale (`85%`–`135%`), and **Reduce motion**.
 - **Window state persistence**: Restores the last non-fullscreen window position (validated against active displays so windows never open off-screen), size, and fullscreen state across launches.
@@ -93,7 +95,7 @@ Install or update directly from GitHub Releases (avoids browser `com.apple.quara
 curl -fsSL https://raw.githubusercontent.com/mzgs/C-GUI-Template/main/install.sh | sh
 ```
 
-Pass a specific tag with `sh -s -- v0.1.3`, or override `REPO`, `VERSION`, and `INSTALL_DIR` via environment variables. On macOS this installs into `/Applications` (or `~/Applications` if `/Applications` is not writable); on Linux it installs into `~/.local/bin`. Update `REPO` at the top of `install.sh` when forking this template.
+Pass a specific tag with `sh -s -- v0.1.3`, or override `REPO`, `VERSION`, and `INSTALL_DIR` via environment variables. On macOS this installs into `/Applications` (or `~/Applications` if `/Applications` is not writable); on Linux it installs the binary into `~/.local/bin` along with its `.desktop` entry and icon into `~/.local/share`. Update `REPO` at the top of `install.sh` when forking this template.
 
 ### macOS code signing (optional)
 
@@ -113,13 +115,14 @@ When creating a new project from this template, update these places first:
 1. **`CMakeLists.txt`** — set your app identity and starting version:
    - `project(<your_project> VERSION 0.1.0 LANGUAGES C)` — rename the CMake project and reset `VERSION`.
    - `APP_NAME` — display name for the window title, macOS `.app` bundle, and per-user settings folder.
-   - `APP_BUNDLE_ID` — unique reverse-DNS macOS bundle identifier (e.g. `com.yourname.my-app`) so macOS signing and permissions don't collide with other apps.
+   - `APP_DESCRIPTION`, `APP_AUTHOR`, `APP_COPYRIGHT` — metadata used in **Settings → About**, macOS `Info.plist`, Windows `VS_VERSION_INFO`, and the Linux `.desktop` entry.
+   - `APP_BUNDLE_ID` — unique reverse-DNS identifier (e.g. `com.yourname.my-app`) used for macOS signing/permissions and Linux desktop/icon matching.
    - `APP_GITHUB_REPO` — your `"owner/repo"` slug for **Settings → About** update checks (or `""` to disable).
    - *(Optional)* Rename the `empty_gui` target in `CMakeLists.txt` if you want a custom Linux/Windows executable name (keep `cui_app_target(...)` and `cui::cui`).
-2. **`install.sh`** — change `REPO="${REPO:-mzgs/C-GUI-Template}"` (and the usage comments) to your `"owner/repo"`.
-3. **App info & docs**:
-   - `src/chrome/settings_dialog.c` (`draw_about_section`) — update the About description text.
-   - `README.md` — update the title, description, and `install.sh` `curl` URL to your repository.
+2. **App icon (`resources/`)** — replace `resources/app.png` (1024×1024 PNG) with your own icon, then run `./resources/generate_icons.sh` on macOS (or replace `resources/app.icns` and `resources/app.ico` directly).
+3. **`install.sh` & `README.md`**:
+   - In `install.sh`, change `REPO="${REPO:-mzgs/C-GUI-Template}"` (and the usage comments) to your `"owner/repo"`.
+   - In `README.md`, update the title, description, and `install.sh` `curl` URL to your repository.
 4. **Verify build & first release**:
    - Build and run locally (`./run.sh` on macOS, or `cmake -S . -B build && cmake --build build`) and run `ctest --test-dir build --output-on-failure`.
    - Ensure GitHub Actions is enabled for the new repo (and optionally configure `~/.macos-codesign/` + `gh auth login` for macOS code signing), then run `./release.sh 0.1.0` when ready for your first release.

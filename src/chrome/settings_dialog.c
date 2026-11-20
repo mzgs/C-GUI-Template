@@ -210,7 +210,7 @@ static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
 static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
     cui_text(ui, APP_NAME, .font = CUI_FONT_MEDIUM);
     cui_secondary(ui, "Version " APP_VERSION);
-    cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");
+    if (APP_DESCRIPTION[0]) cui_secondary(ui, APP_DESCRIPTION);
 
     if (app_updater_configured()) {
         if (!chrome->update_auto_checked) {

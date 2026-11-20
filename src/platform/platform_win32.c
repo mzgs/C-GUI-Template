@@ -69,6 +69,26 @@ void app_window_center(void *native_window, const char *backend) {
     }
 }
 
+void app_window_apply_metadata(void *native_window, const char *backend) {
+    if (!native_window || !backend || strcmp(backend, "win32") != 0) return;
+    HWND hwnd = (HWND)native_window;
+    HINSTANCE inst = GetModuleHandleW(NULL);
+    HANDLE small_icon = LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                   GetSystemMetrics(SM_CXSMICON),
+                                   GetSystemMetrics(SM_CYSMICON),
+                                   LR_DEFAULTCOLOR | LR_SHARED);
+    if (small_icon) {
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM)small_icon);
+    }
+    HANDLE big_icon = LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                 GetSystemMetrics(SM_CXICON),
+                                 GetSystemMetrics(SM_CYICON),
+                                 LR_DEFAULTCOLOR | LR_SHARED);
+    if (big_icon) {
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)big_icon);
+    }
+}
+
 static void win32_set_err(char *err, size_t err_cap, const char *msg) {
     if (!err || err_cap == 0) return;
     snprintf(err, err_cap, "%s", msg ? msg : "Unknown error.");

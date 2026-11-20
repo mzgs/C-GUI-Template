@@ -84,6 +84,11 @@ void app_window_center(void *native_window, const char *backend) {
     }
 }
 
+void app_window_apply_metadata(void *native_window, const char *backend) {
+    (void)native_window;
+    (void)backend;
+}
+
 static void macos_set_err(char *err, size_t err_cap, const char *msg) {
     if (!err || err_cap == 0) return;
     snprintf(err, err_cap, "%s", msg ? msg : "Unknown error.");

@@ -17,10 +17,11 @@
 #include <unistd.h>
 
 #if defined(__has_include)
-#if __has_include(<X11/Xlib.h>) && __has_include(<X11/Xatom.h>)
+#if __has_include(<X11/Xlib.h>) && __has_include(<X11/Xatom.h>) && __has_include(<X11/Xutil.h>)
 #define APP_HAVE_X11 1
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #endif
 #endif
 
@@ -128,6 +129,26 @@ void app_window_center(void *native_window, const char *backend) {
         int cx = (DisplayWidth(dpy, scr) - attr.width) / 2;
         int cy = (DisplayHeight(dpy, scr) - attr.height) / 2;
         XMoveWindow(dpy, win, cx > 0 ? cx : 0, cy > 0 ? cy : 0);
+        XFlush(dpy);
+    }
+#endif
+}
+
+void app_window_apply_metadata(void *native_window, const char *backend) {
+    if (!native_window || !backend) return;
+#ifdef APP_HAVE_X11
+    if (strcmp(backend, "x11") == 0 && APP_BUNDLE_ID[0] != '\0') {
+        Display *dpy = x11_display();
+        if (!dpy) return;
+        Window win = (Window)(uintptr_t)native_window;
+        XClassHint *hint = XAllocClassHint();
+        if (!hint) return;
+        char wm_class[256];
+        snprintf(wm_class, sizeof wm_class, "%s", APP_BUNDLE_ID);
+        hint->res_name = wm_class;
+        hint->res_class = wm_class;
+        XSetClassHint(dpy, win, hint);
+        XFree(hint);
         XFlush(dpy);
     }
 #endif

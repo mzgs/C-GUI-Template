@@ -160,11 +160,15 @@ else
     mkdir -p "$TARGET_DIR"
 
     INSTALLED=0
+    INSTALLED_BIN=""
     for candidate in "$EXTRACT_DIR"/*; do
         if [ -f "$candidate" ] && [ -x "$candidate" ]; then
             BIN_NAME="$(basename "$candidate")"
             install -m 755 "$candidate" "$TARGET_DIR/$BIN_NAME"
             echo "Installed $BIN_NAME ($TAG) to $TARGET_DIR/$BIN_NAME"
+            if [ -z "$INSTALLED_BIN" ]; then
+                INSTALLED_BIN="$TARGET_DIR/$BIN_NAME"
+            fi
             INSTALLED=1
         fi
     done
@@ -172,5 +176,50 @@ else
     if [ "$INSTALLED" -eq 0 ]; then
         echo "No executable found inside $ASSET." >&2
         exit 1
+    fi
+
+    DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+    if [ -d "$EXTRACT_DIR/share/icons/hicolor/512x512/apps" ]; then
+        ICON_DIR="$DATA_DIR/icons/hicolor/512x512/apps"
+        mkdir -p "$ICON_DIR"
+        for icon in "$EXTRACT_DIR"/share/icons/hicolor/512x512/apps/*.png; do
+            if [ -f "$icon" ]; then
+                install -m 644 "$icon" "$ICON_DIR/$(basename "$icon")"
+            fi
+        done
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -f -t "$DATA_DIR/icons/hicolor" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if [ -d "$EXTRACT_DIR/share/applications" ]; then
+        APP_DIR="$DATA_DIR/applications"
+        mkdir -p "$APP_DIR"
+        for desktop in "$EXTRACT_DIR"/share/applications/*.desktop; do
+            if [ -f "$desktop" ]; then
+                DEST_DESKTOP="$APP_DIR/$(basename "$desktop")"
+                INSTALLED_BIN="$INSTALLED_BIN" awk '
+                    /^Exec=/ {
+                        raw = ENVIRON["INSTALLED_BIN"]
+                        need_quote = (raw ~ /[[:space:]"\\]/)
+                        out = ""
+                        for (i = 1; i <= length(raw); i++) {
+                            ch = substr(raw, i, 1)
+                            if (need_quote && (ch == "\\" || ch == "\"")) out = out "\\" ch
+                            else if (ch == "%") out = out "%%"
+                            else out = out ch
+                        }
+                        if (need_quote) out = "\"" out "\""
+                        print "Exec=" out
+                        next
+                    }
+                    { print }
+                ' "$desktop" > "$DEST_DESKTOP"
+                chmod 644 "$DEST_DESKTOP"
+            fi
+        done
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database "$APP_DIR" >/dev/null 2>&1 || true
+        fi
     fi
 fi
