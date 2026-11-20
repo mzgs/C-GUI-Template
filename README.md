@@ -32,6 +32,7 @@ src/
 - **Keybindings with dispatch & conflict warnings**: Filter by action or key combination (case-insensitive), click a shortcut to rebind, or press Backspace to clear. Duplicate bindings and conflicts with the reserved Settings shortcut are highlighted.
 - **Command Palette**: Press **⌘K** on macOS or **Ctrl+K** on Windows/Linux (rebindable in Keybindings) to search navigation, theme switching, fullscreen, and app actions.
 - **Toast notifications & Settings file tools**: Import, export, reset (with confirmation), or reveal the settings folder directly from Settings. Unknown fields in imported `settings.json` files are safely ignored across versions.
+- **In-app update check**: Opening **Settings → About** checks GitHub Releases (`APP_GITHUB_REPO` in `CMakeLists.txt`, or empty to disable) and shows an **Update** button when a newer version is available. On macOS and Linux it downloads, installs in place, and relaunches (falling back to opening the release page on Windows or non-writable locations).
 - **CLI flags**: `--help` (`-h`), `--version` (`-v`), `--settings <path>`, and `--software` (force software renderer).
 
 Settings, appearance, window state, and keybinding changes autosave to:

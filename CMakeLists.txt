@@ -8,6 +8,9 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(APP_NAME "C GUI Template" CACHE STRING "App name used for the window and settings folder")
 set(APP_BUNDLE_ID "com.example.c-gui-template" CACHE STRING "macOS bundle identifier (CFBundleIdentifier)")
+set(APP_GITHUB_REPO "mzgs/C-GUI-Template" CACHE STRING "GitHub owner/repo for update checks (empty to disable)")
+
+find_package(Threads REQUIRED)
 
 include(FetchContent)
 FetchContent_Declare(cui
@@ -21,7 +24,8 @@ FetchContent_MakeAvailable(cui yyjson)
 add_library(app_common INTERFACE)
 target_compile_definitions(app_common INTERFACE
     "APP_NAME=\"${APP_NAME}\""
-    "APP_VERSION=\"${PROJECT_VERSION}\"")
+    "APP_VERSION=\"${PROJECT_VERSION}\""
+    "APP_GITHUB_REPO=\"${APP_GITHUB_REPO}\"")
 if(MSVC)
     target_compile_options(app_common INTERFACE /utf-8 /W4)
 else()
@@ -35,7 +39,7 @@ if(APPLE)
     target_link_libraries(app_platform PRIVATE "-framework Cocoa")
 elseif(WIN32)
     add_library(app_platform STATIC src/platform/platform_win32.c)
-    target_link_libraries(app_platform PRIVATE advapi32 user32)
+    target_link_libraries(app_platform PRIVATE advapi32 user32 winhttp)
 else()
     add_library(app_platform STATIC src/platform/platform_x11.c)
     target_link_libraries(app_platform PRIVATE cui::cui)
@@ -53,9 +57,10 @@ endif()
 add_library(app_chrome STATIC
     src/chrome/app_chrome.c
     src/chrome/settings_dialog.c
-    src/chrome/command_palette.c)
+    src/chrome/command_palette.c
+    src/chrome/updater.c)
 target_include_directories(app_chrome PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/chrome")
-target_link_libraries(app_chrome PUBLIC app_settings PRIVATE app_common)
+target_link_libraries(app_chrome PUBLIC app_settings PRIVATE app_common Threads::Threads)
 if(APPLE)
     target_sources(app_chrome PRIVATE src/platform/app_menu_macos.m)
     set_source_files_properties(src/platform/app_menu_macos.m PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
@@ -81,6 +86,10 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    add_executable(updater_tests tests/updater_tests.c)
+    target_link_libraries(updater_tests PRIVATE app_chrome app_common)
+    add_test(NAME updater_tests COMMAND updater_tests)
+
     add_test(NAME window_smoke COMMAND ${CMAKE_COMMAND} -E env
         "CUI_SCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/window-smoke.png"
         CUI_SCREENSHOT_FRAMES=1 $<TARGET_FILE:empty_gui>)

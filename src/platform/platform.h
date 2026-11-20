@@ -22,4 +22,23 @@ void app_window_center(void *native_window, const char *backend);
 bool macos_settings_path(char *path, size_t capacity);
 #endif
 
+/* Callback polled by the updater before swapping installed files on disk. */
+typedef bool (*app_updater_abort_fn)(void *user);
+
+/* Resolve HTTP(S) redirects via HEAD and write the final URL. */
+bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity,
+                               char *err, size_t err_cap);
+
+/* True when the running installation can be updated in place. */
+bool app_updater_can_self_update(void);
+
+/* Download, extract, and atomically replace the running app on disk. */
+bool app_updater_install_release(const char *repo, const char *tag,
+                                 char *relaunch_path, size_t relaunch_cap,
+                                 app_updater_abort_fn should_abort, void *abort_user,
+                                 char *err, size_t err_cap);
+
+/* Spawn a detached helper that waits for this process to exit and launches path. */
+bool app_updater_relaunch(const char *relaunch_path);
+
 #endif

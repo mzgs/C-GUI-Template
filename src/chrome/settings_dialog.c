@@ -1,4 +1,5 @@
 #include "chrome_internal.h"
+#include "platform.h"
 #include <math.h>
 #include <stdio.h>
 
@@ -206,10 +207,87 @@ static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
     return changed;
 }
 
-static void draw_about_section(cui_ctx *ui) {
+static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
     cui_text(ui, APP_NAME, .font = CUI_FONT_MEDIUM);
     cui_secondary(ui, "Version " APP_VERSION);
     cui_secondary(ui, "A C99 desktop app built with Better-C-UI.");
+
+    if (app_updater_configured()) {
+        if (!chrome->update_auto_checked) {
+            chrome_check_for_updates(chrome);
+        }
+        app_update_snapshot upd;
+        chrome_updater_snapshot(chrome, &upd);
+        bool can_self_update = app_updater_can_self_update();
+        const char *ver_label = upd.latest_tag[0] ? upd.latest_tag : upd.latest_version;
+
+        cui_separator(ui);
+        switch (upd.state) {
+        case APP_UPDATE_CHECKING:
+            cui_row(ui, .gap = 8, .align = CUI_ALIGN_CENTER) {
+                cui_spinner(ui, 16);
+                cui_secondary(ui, "Checking for updates…");
+            }
+            break;
+        case APP_UPDATE_UP_TO_DATE:
+            cui_row(ui, .gap = 8, .align = CUI_ALIGN_CENTER, .wrap = true) {
+                cui_badge(ui, "Up to date", .tone = CUI_TONE_SUCCESS, .icon = CUI_ICON_CHECK);
+                cui_secondary(ui, "You have the latest version.");
+            }
+            break;
+        case APP_UPDATE_AVAILABLE: {
+            char title[96];
+            snprintf(title, sizeof title, "Update available: %s", ver_label);
+            const char *desc = can_self_update
+                ? "Download, install, and relaunch to update."
+                : "A newer release is available on GitHub.";
+            cui_alert(ui, title, .description = desc, .tone = CUI_TONE_INFO);
+            break;
+        }
+        case APP_UPDATE_UPDATING: {
+            char label[96];
+            snprintf(label, sizeof label, "Updating to %s…", ver_label);
+            cui_secondary(ui, label);
+            cui_progress(ui, 0.0f, .indeterminate = true, .width = CUI_FILL);
+            break;
+        }
+        case APP_UPDATE_READY_TO_RELAUNCH:
+            cui_alert(ui, "Update installed",
+                      .description = "Relaunching the updated version…",
+                      .tone = CUI_TONE_SUCCESS);
+            break;
+        case APP_UPDATE_ERROR:
+            cui_alert(ui, upd.has_update ? "Update failed" : "Couldn’t check for updates",
+                      .description = upd.error[0] ? upd.error : "Please try again later.",
+                      .tone = CUI_TONE_DANGER);
+            break;
+        default:
+            break;
+        }
+
+        if (upd.has_update && upd.state != APP_UPDATE_READY_TO_RELAUNCH) {
+            cui_row(ui, .gap = 8, .wrap = true) {
+                if (cui_button(ui, "Update",
+                               .variant = CUI_BUTTON_PRIMARY,
+                               .icon = can_self_update ? CUI_ICON_DOWNLOAD : CUI_ICON_EXTERNAL_LINK,
+                               .loading = (upd.state == APP_UPDATE_UPDATING),
+                               .tooltip = can_self_update ? "Download, install, and relaunch"
+                                                          : "Open release page in browser")) {
+                    chrome_start_update(chrome, ui);
+                }
+                if (can_self_update && upd.release_url[0]) {
+                    if (cui_button(ui, "Release Notes",
+                                   .variant = CUI_BUTTON_GHOST,
+                                   .icon = CUI_ICON_EXTERNAL_LINK,
+                                   .disabled = (upd.state == APP_UPDATE_UPDATING))) {
+                        if (!cui_app_open_url(upd.release_url))
+                            app_chrome_notify(chrome, ui, "Couldn’t open release page.", CUI_TONE_DANGER);
+                    }
+                }
+            }
+        }
+    }
+
     cui_separator(ui);
     const char *backend = cui_app_backend(NULL);
     const char *renderer = cui_app_is_software(NULL) ? "Software" : "OpenGL";
@@ -257,7 +335,7 @@ void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
                             changed = draw_keybindings_section(chrome, ui);
                             break;
                         default:
-                            draw_about_section(ui);
+                            draw_about_section(chrome, ui);
                             break;
                         }
                         if (changed || (chrome->settings_dirty && chrome->settings_section != SETTINGS_SECTION_GENERAL)) {
@@ -271,5 +349,13 @@ void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
     }
     if (!chrome->settings_open && chrome->settings_dirty) {
         chrome_save_settings(chrome, ui);
+    }
+    if (chrome->update_auto_checked &&
+        (!chrome->settings_open || chrome->settings_section != SETTINGS_SECTION_ABOUT)) {
+        app_update_snapshot upd;
+        chrome_updater_snapshot(chrome, &upd);
+        if (upd.state == APP_UPDATE_UP_TO_DATE || (upd.state == APP_UPDATE_ERROR && !upd.has_update)) {
+            chrome->update_auto_checked = false;
+        }
     }
 }

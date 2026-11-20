@@ -210,6 +210,75 @@ static void save_if_dirty(app_chrome *chrome) {
 
 void app_chrome_shutdown(app_chrome *chrome) {
     save_if_dirty(chrome);
+    if (chrome->updater) {
+        app_updater_destroy(chrome->updater);
+        chrome->updater = NULL;
+    }
+}
+
+static app_updater *chrome_ensure_updater(app_chrome *chrome) {
+    if (!chrome->updater && app_updater_configured()) {
+        chrome->updater = app_updater_create(APP_GITHUB_REPO, APP_VERSION);
+    }
+    return chrome->updater;
+}
+
+void chrome_check_for_updates(app_chrome *chrome) {
+    app_updater *updater = chrome_ensure_updater(chrome);
+    if (updater) {
+        chrome->update_auto_checked = true;
+        app_updater_check(updater);
+    }
+}
+
+void chrome_start_update(app_chrome *chrome, cui_ctx *ui) {
+    app_update_snapshot snap;
+    chrome_updater_snapshot(chrome, &snap);
+    if (!snap.has_update) return;
+
+    if (app_updater_can_self_update()) {
+        app_updater *updater = chrome_ensure_updater(chrome);
+        if (updater) app_updater_start_install(updater);
+        return;
+    }
+
+    if (snap.release_url[0] && cui_app_open_url(snap.release_url)) {
+        app_chrome_notify(chrome, ui, "Opened release page in browser.", CUI_TONE_INFO);
+    } else {
+        app_chrome_notify(chrome, ui, "Couldn’t open release page.", CUI_TONE_DANGER);
+    }
+}
+
+void chrome_updater_snapshot(app_chrome *chrome, app_update_snapshot *out) {
+    app_updater_snapshot(chrome ? chrome->updater : NULL, out);
+}
+
+static void chrome_poll_updater(app_chrome *chrome, cui_ctx *ui) {
+    if (!chrome->updater) return;
+    app_update_snapshot snap;
+    app_updater_snapshot(chrome->updater, &snap);
+
+    if (snap.state == APP_UPDATE_CHECKING || snap.state == APP_UPDATE_UPDATING) {
+        cui_request_wakeup(ui, 0.1f);
+    }
+
+    if (snap.state == APP_UPDATE_READY_TO_RELAUNCH && !chrome->update_relaunching) {
+        chrome->update_relaunching = true;
+        capture_live_window_bounds(chrome);
+        save_if_dirty(chrome);
+        if (app_updater_relaunch(snap.relaunch_path)) {
+            cui_app_quit(NULL);
+        } else {
+            app_chrome_notify(chrome, ui, "Update installed. Please restart the app.", CUI_TONE_SUCCESS);
+        }
+    } else if (snap.state == APP_UPDATE_ERROR &&
+               chrome->last_update_state != APP_UPDATE_ERROR &&
+               !(chrome->settings_open && chrome->settings_section == SETTINGS_SECTION_ABOUT)) {
+        app_chrome_notify(chrome, ui,
+                          snap.error[0] ? snap.error : "Update failed.",
+                          CUI_TONE_DANGER);
+    }
+    chrome->last_update_state = (int)snap.state;
 }
 
 #ifdef __APPLE__
@@ -360,6 +429,7 @@ void app_chrome_begin_frame(app_chrome *chrome, cui_ctx *ui) {
 void app_chrome_end_frame(app_chrome *chrome, cui_ctx *ui) {
     chrome_draw_command_palette(chrome, ui);
     chrome_draw_settings_dialog(chrome, ui);
+    chrome_poll_updater(chrome, ui);
 #ifdef __APPLE__
     if (chrome->injected_edit_key != CUI_KEY_NONE) {
         cui_input_key(ui, chrome->injected_edit_key, false, 0);

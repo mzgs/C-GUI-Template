@@ -4,8 +4,10 @@
 #endif
 
 #include "platform.h"
+#include <stdio.h>
 #include <string.h>
 #include <windows.h>
+#include <winhttp.h>
 
 int app_system_dark(void) {
     HKEY key;
@@ -65,4 +67,137 @@ void app_window_center(void *native_window, const char *backend) {
         int cy = mi.rcWork.top + ((mi.rcWork.bottom - mi.rcWork.top) - h) / 2;
         SetWindowPos(hwnd, NULL, cx, cy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
+}
+
+static void win32_set_err(char *err, size_t err_cap, const char *msg) {
+    if (!err || err_cap == 0) return;
+    snprintf(err, err_cap, "%s", msg ? msg : "Unknown error.");
+}
+
+bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity,
+                               char *err, size_t err_cap) {
+    if (!url || !final_url || capacity == 0) {
+        win32_set_err(err, err_cap, "Invalid update check request.");
+        return false;
+    }
+    final_url[0] = '\0';
+
+    wchar_t wide_url[2048];
+    if (MultiByteToWideChar(CP_UTF8, 0, url, -1, wide_url,
+                            (int)(sizeof wide_url / sizeof wide_url[0])) <= 0) {
+        win32_set_err(err, err_cap, "Invalid update URL.");
+        return false;
+    }
+
+    wchar_t host[256] = { 0 };
+    wchar_t path[1536] = { 0 };
+    URL_COMPONENTSW parts;
+    memset(&parts, 0, sizeof parts);
+    parts.dwStructSize = sizeof parts;
+    parts.lpszHostName = host;
+    parts.dwHostNameLength = (DWORD)(sizeof host / sizeof host[0]);
+    parts.lpszUrlPath = path;
+    parts.dwUrlPathLength = (DWORD)(sizeof path / sizeof path[0]);
+    if (!WinHttpCrackUrl(wide_url, 0, 0, &parts) || !host[0]) {
+        win32_set_err(err, err_cap, "Invalid update URL.");
+        return false;
+    }
+
+    bool ok = false;
+    HINTERNET session = NULL;
+    HINTERNET connect = NULL;
+    HINTERNET request = NULL;
+
+    do {
+#ifdef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
+        DWORD access_type = WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY;
+#else
+        DWORD access_type = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
+#endif
+        session = WinHttpOpen(L"C-GUI-Template", access_type,
+                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!session) {
+            win32_set_err(err, err_cap, "Could not initialize HTTP client.");
+            break;
+        }
+        WinHttpSetTimeouts(session, 10000, 10000, 15000, 15000);
+
+        connect = WinHttpConnect(session, host, parts.nPort, 0);
+        if (!connect) {
+            win32_set_err(err, err_cap, "Could not connect to GitHub.");
+            break;
+        }
+
+        DWORD flags = (parts.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        request = WinHttpOpenRequest(connect, L"HEAD", path[0] ? path : L"/",
+                                     NULL, WINHTTP_NO_REFERER,
+                                     WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        if (!request) {
+            win32_set_err(err, err_cap, "Could not create HTTP request.");
+            break;
+        }
+
+        if (!WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+            !WinHttpReceiveResponse(request, NULL)) {
+            win32_set_err(err, err_cap, "Could not reach GitHub.");
+            break;
+        }
+
+        DWORD status = 0;
+        DWORD status_size = sizeof status;
+        if (!WinHttpQueryHeaders(request,
+                                 WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                                 WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
+                                 WINHTTP_NO_HEADER_INDEX) ||
+            status < 200 || status >= 400) {
+            char buf[64];
+            snprintf(buf, sizeof buf, "Server returned HTTP %lu.", (unsigned long)status);
+            win32_set_err(err, err_cap, buf);
+            break;
+        }
+
+        wchar_t resolved[2048];
+        DWORD resolved_bytes = (DWORD)sizeof resolved;
+        if (!WinHttpQueryOption(request, WINHTTP_OPTION_URL, resolved, &resolved_bytes)) {
+            win32_set_err(err, err_cap, "Could not read resolved update URL.");
+            break;
+        }
+        int utf8_len = WideCharToMultiByte(CP_UTF8, 0, resolved, -1,
+                                           final_url, (int)capacity, NULL, NULL);
+        if (utf8_len <= 0) {
+            final_url[0] = '\0';
+            win32_set_err(err, err_cap, "Resolved URL is too long.");
+            break;
+        }
+        ok = true;
+    } while (0);
+
+    if (request) WinHttpCloseHandle(request);
+    if (connect) WinHttpCloseHandle(connect);
+    if (session) WinHttpCloseHandle(session);
+    return ok;
+}
+
+bool app_updater_can_self_update(void) {
+    return false;
+}
+
+bool app_updater_install_release(const char *repo, const char *tag,
+                                 char *relaunch_path, size_t relaunch_cap,
+                                 app_updater_abort_fn should_abort, void *abort_user,
+                                 char *err, size_t err_cap) {
+    (void)repo;
+    (void)tag;
+    (void)relaunch_path;
+    (void)relaunch_cap;
+    (void)should_abort;
+    (void)abort_user;
+    win32_set_err(err, err_cap, "In-place update is not supported on Windows.");
+    return false;
+}
+
+bool app_updater_relaunch(const char *relaunch_path) {
+    (void)relaunch_path;
+    return false;
 }

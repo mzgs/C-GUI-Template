@@ -2,6 +2,7 @@
 #define CHROME_INTERNAL_H
 
 #include "app_chrome.h"
+#include "updater.h"
 
 extern const char *const chrome_theme_icons[APP_THEME_COUNT];
 extern const char *const chrome_section_labels[SETTINGS_SECTION_COUNT];
@@ -17,6 +18,10 @@ void chrome_open_settings_folder(app_chrome *chrome, cui_ctx *ui);
 void chrome_reset_window(app_chrome *chrome, cui_ctx *ui);
 void chrome_toggle_fullscreen(void);
 void chrome_trigger_action(app_chrome *chrome, cui_ctx *ui, app_action action);
+
+void chrome_check_for_updates(app_chrome *chrome);
+void chrome_start_update(app_chrome *chrome, cui_ctx *ui);
+void chrome_updater_snapshot(app_chrome *chrome, app_update_snapshot *out);
 
 void chrome_draw_command_palette(app_chrome *chrome, cui_ctx *ui);
 void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui);

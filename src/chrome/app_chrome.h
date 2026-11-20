@@ -21,6 +21,8 @@ typedef struct {
 
 typedef void (*app_action_handler)(cui_ctx *ui, app_action action, void *user);
 
+struct app_updater;
+
 typedef struct {
     /* Settings & CLI options */
     app_settings settings;
@@ -31,6 +33,12 @@ typedef struct {
     bool palette_open;
     int settings_section;
     char keybinding_filter[128];
+
+    /* Update checker state */
+    struct app_updater *updater;
+    bool update_auto_checked;
+    bool update_relaunching;
+    int last_update_state;
 
     /* Internal lifecycle & persistence tracking */
     bool settings_save_failed;

@@ -1,7 +1,12 @@
 #import <Cocoa/Cocoa.h>
 #include "platform.h"
+#include <fcntl.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 bool macos_settings_path(char *path, size_t capacity) {
     @autoreleasepool {
@@ -77,4 +82,327 @@ void app_window_center(void *native_window, const char *backend) {
         NSWindow *win = (__bridge NSWindow *)native_window;
         [win center];
     }
+}
+
+static void macos_set_err(char *err, size_t err_cap, const char *msg) {
+    if (!err || err_cap == 0) return;
+    snprintf(err, err_cap, "%s", msg ? msg : "Unknown error.");
+}
+
+static const char *macos_release_arch(void) {
+#if defined(__aarch64__) || defined(__arm64__)
+    return "arm64";
+#elif defined(__x86_64__)
+    return "x64";
+#else
+    return NULL;
+#endif
+}
+
+static NSString *macos_user_agent(void) {
+    return [NSString stringWithFormat:@"%s/%s", APP_NAME, APP_VERSION];
+}
+
+bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity,
+                               char *err, size_t err_cap) {
+    if (!url || !final_url || capacity == 0) {
+        macos_set_err(err, err_cap, "Invalid update check request.");
+        return false;
+    }
+    final_url[0] = '\0';
+
+    @autoreleasepool {
+        NSString *urlStr = [NSString stringWithUTF8String:url];
+        NSURL *nsUrl = urlStr ? [NSURL URLWithString:urlStr] : nil;
+        if (!nsUrl) {
+            macos_set_err(err, err_cap, "Invalid update URL.");
+            return false;
+        }
+
+        NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+        cfg.timeoutIntervalForRequest = 15.0;
+        cfg.timeoutIntervalForResource = 20.0;
+        NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:nsUrl];
+        req.HTTPMethod = @"HEAD";
+        req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+        [req setValue:macos_user_agent() forHTTPHeaderField:@"User-Agent"];
+
+        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+        __block NSString *resolved = nil;
+        __block NSInteger statusCode = 0;
+        __block NSString *errMsg = nil;
+
+        NSURLSessionDataTask *task =
+            [session dataTaskWithRequest:req
+                       completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+                (void)data;
+                if (error) {
+                    errMsg = error.localizedDescription ?: @"Network error.";
+                } else if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+                    NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+                    statusCode = http.statusCode;
+                    resolved = http.URL.absoluteString;
+                } else {
+                    errMsg = @"Unexpected server response.";
+                }
+                dispatch_semaphore_signal(sem);
+            }];
+        [task resume];
+        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+        [session finishTasksAndInvalidate];
+
+        if (errMsg) {
+            macos_set_err(err, err_cap, errMsg.UTF8String);
+            return false;
+        }
+        if (statusCode < 200 || statusCode >= 400) {
+            char buf[64];
+            snprintf(buf, sizeof buf, "Server returned HTTP %ld.", (long)statusCode);
+            macos_set_err(err, err_cap, buf);
+            return false;
+        }
+        if (!resolved.length) {
+            macos_set_err(err, err_cap, "Empty redirect response.");
+            return false;
+        }
+        const char *utf8 = resolved.UTF8String;
+        if (!utf8 || strlen(utf8) >= capacity) {
+            macos_set_err(err, err_cap, "Resolved URL is too long.");
+            return false;
+        }
+        snprintf(final_url, capacity, "%s", utf8);
+        return true;
+    }
+}
+
+bool app_updater_can_self_update(void) {
+    if (!macos_release_arch()) return false;
+    @autoreleasepool {
+        NSString *bundlePath = NSBundle.mainBundle.bundlePath;
+        if (!bundlePath.length || ![bundlePath hasSuffix:@".app"]) return false;
+        if ([bundlePath rangeOfString:@"/AppTranslocation/"].location != NSNotFound) return false;
+        NSString *parentDir = [bundlePath stringByDeletingLastPathComponent];
+        if (!parentDir.length) return false;
+        if (access(parentDir.fileSystemRepresentation, W_OK) != 0) return false;
+        if (access(bundlePath.fileSystemRepresentation, W_OK) != 0) return false;
+        return true;
+    }
+}
+
+static bool macos_run_tool(NSString *launchPath, NSArray<NSString *> *args) {
+    NSTask *task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:launchPath];
+    task.arguments = args;
+    NSFileHandle *nullHandle = [NSFileHandle fileHandleWithNullDevice];
+    task.standardOutput = nullHandle;
+    task.standardError = nullHandle;
+    NSError *error = nil;
+    if (![task launchAndReturnError:&error]) return false;
+    [task waitUntilExit];
+    return task.terminationReason == NSTaskTerminationReasonExit && task.terminationStatus == 0;
+}
+
+bool app_updater_install_release(const char *repo, const char *tag,
+                                 char *relaunch_path, size_t relaunch_cap,
+                                 app_updater_abort_fn should_abort, void *abort_user,
+                                 char *err, size_t err_cap) {
+    if (!repo || !tag || !app_updater_can_self_update()) {
+        macos_set_err(err, err_cap, "In-place update is unavailable for this installation.");
+        return false;
+    }
+    const char *slash = strchr(repo, '/');
+    const char *arch = macos_release_arch();
+    if (!slash || !slash[1] || !arch) {
+        macos_set_err(err, err_cap, "Invalid repository or architecture.");
+        return false;
+    }
+    const char *repo_name = slash + 1;
+
+    @autoreleasepool {
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *bundlePath = NSBundle.mainBundle.bundlePath;
+        NSString *parentDir = [bundlePath stringByDeletingLastPathComponent];
+        NSString *bundleName = [bundlePath lastPathComponent];
+
+        NSString *urlStr = [NSString stringWithFormat:
+            @"https://github.com/%s/releases/download/%s/%s-%s-macos-%s.zip",
+            repo, tag, repo_name, tag, arch];
+        NSURL *url = [NSURL URLWithString:urlStr];
+        if (!url) {
+            macos_set_err(err, err_cap, "Invalid release download URL.");
+            return false;
+        }
+
+        NSString *tmpBase = NSTemporaryDirectory();
+        if (!tmpBase.length) tmpBase = @"/tmp";
+        char tmpTemplate[4096];
+        int n = snprintf(tmpTemplate, sizeof tmpTemplate, "%s/app-update.XXXXXX", tmpBase.fileSystemRepresentation);
+        if (n < 0 || (size_t)n >= sizeof tmpTemplate || !mkdtemp(tmpTemplate)) {
+            macos_set_err(err, err_cap, "Could not create a temporary directory.");
+            return false;
+        }
+        NSString *tmpDir = [fm stringWithFileSystemRepresentation:tmpTemplate length:strlen(tmpTemplate)];
+        NSString *archivePath = [tmpDir stringByAppendingPathComponent:@"update.zip"];
+        NSString *extractDir = [tmpDir stringByAppendingPathComponent:@"extract"];
+        NSString *stagedPath = nil;
+        bool ok = false;
+
+        do {
+            NSURLSessionConfiguration *cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+            cfg.timeoutIntervalForRequest = 30.0;
+            cfg.timeoutIntervalForResource = 180.0;
+            NSURLSession *session = [NSURLSession sessionWithConfiguration:cfg];
+
+            NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+            req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+            [req setValue:macos_user_agent() forHTTPHeaderField:@"User-Agent"];
+
+            dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+            __block NSInteger statusCode = 0;
+            __block NSString *dlErr = nil;
+
+            NSURLSessionDownloadTask *task =
+                [session downloadTaskWithRequest:req
+                               completionHandler:^(NSURL *location, NSURLResponse *response, NSError *error) {
+                    if (error) {
+                        dlErr = error.localizedDescription ?: @"Download failed.";
+                    } else if (![response isKindOfClass:[NSHTTPURLResponse class]]) {
+                        dlErr = @"Unexpected download response.";
+                    } else {
+                        NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+                        statusCode = http.statusCode;
+                        if (statusCode == 200 && location) {
+                            NSError *moveErr = nil;
+                            if (![[NSFileManager defaultManager] moveItemAtURL:location
+                                                                         toURL:[NSURL fileURLWithPath:archivePath]
+                                                                         error:&moveErr]) {
+                                dlErr = moveErr.localizedDescription ?: @"Could not save update archive.";
+                            }
+                        } else if (statusCode == 404) {
+                            dlErr = @"No macOS update archive was found for this release.";
+                        } else {
+                            dlErr = [NSString stringWithFormat:@"Download failed (HTTP %ld).", (long)statusCode];
+                        }
+                    }
+                    dispatch_semaphore_signal(sem);
+                }];
+            [task resume];
+            dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+            [session finishTasksAndInvalidate];
+
+            if (dlErr) {
+                macos_set_err(err, err_cap, dlErr.UTF8String);
+                break;
+            }
+            if (should_abort && should_abort(abort_user)) {
+                macos_set_err(err, err_cap, "Update cancelled.");
+                break;
+            }
+
+            if (![fm createDirectoryAtPath:extractDir withIntermediateDirectories:YES attributes:nil error:nil]) {
+                macos_set_err(err, err_cap, "Could not prepare extraction directory.");
+                break;
+            }
+            if (!macos_run_tool(@"/usr/bin/ditto", @[ @"-x", @"-k", archivePath, extractDir ])) {
+                macos_set_err(err, err_cap, "Could not extract update archive.");
+                break;
+            }
+
+            NSArray<NSString *> *entries = [fm contentsOfDirectoryAtPath:extractDir error:nil];
+            NSString *srcApp = nil;
+            for (NSString *entry in entries) {
+                if (![entry hasSuffix:@".app"]) continue;
+                NSString *candidate = [extractDir stringByAppendingPathComponent:entry];
+                NSString *plist = [candidate stringByAppendingPathComponent:@"Contents/Info.plist"];
+                if ([fm fileExistsAtPath:plist]) {
+                    srcApp = candidate;
+                    break;
+                }
+            }
+            if (!srcApp) {
+                macos_set_err(err, err_cap, "Downloaded archive does not contain an app bundle.");
+                break;
+            }
+
+            pid_t pid = getpid();
+            stagedPath = [parentDir stringByAppendingPathComponent:
+                [NSString stringWithFormat:@".%@.updating.%ld", bundleName, (long)pid]];
+            NSString *backupPath = [parentDir stringByAppendingPathComponent:
+                [NSString stringWithFormat:@".%@.backup.%ld", bundleName, (long)pid]];
+            [fm removeItemAtPath:stagedPath error:nil];
+            [fm removeItemAtPath:backupPath error:nil];
+
+            if (!macos_run_tool(@"/usr/bin/ditto", @[ srcApp, stagedPath ])) {
+                macos_set_err(err, err_cap, "Could not stage updated app bundle.");
+                break;
+            }
+            (void)macos_run_tool(@"/usr/bin/xattr", @[ @"-dr", @"com.apple.quarantine", stagedPath ]);
+
+            if (should_abort && should_abort(abort_user)) {
+                macos_set_err(err, err_cap, "Update cancelled.");
+                break;
+            }
+
+            const char *curFs = bundlePath.fileSystemRepresentation;
+            const char *stagedFs = stagedPath.fileSystemRepresentation;
+            const char *backupFs = backupPath.fileSystemRepresentation;
+            if (rename(curFs, backupFs) != 0) {
+                macos_set_err(err, err_cap, "Could not replace the installed app bundle.");
+                break;
+            }
+            if (rename(stagedFs, curFs) != 0) {
+                (void)rename(backupFs, curFs);
+                macos_set_err(err, err_cap, "Could not move the updated app bundle into place.");
+                break;
+            }
+            stagedPath = nil;
+            [fm removeItemAtPath:backupPath error:nil];
+
+            if (relaunch_path && relaunch_cap > 0) {
+                if (![bundlePath getFileSystemRepresentation:relaunch_path maxLength:relaunch_cap]) {
+                    relaunch_path[0] = '\0';
+                }
+            }
+            ok = true;
+        } while (0);
+
+        if (stagedPath) [fm removeItemAtPath:stagedPath error:nil];
+        [fm removeItemAtPath:tmpDir error:nil];
+        return ok;
+    }
+}
+
+bool app_updater_relaunch(const char *relaunch_path) {
+    if (!relaunch_path || !relaunch_path[0]) return false;
+    char pid_str[32];
+    snprintf(pid_str, sizeof pid_str, "%ld", (long)getpid());
+
+    pid_t pid = fork();
+    if (pid < 0) return false;
+    if (pid == 0) {
+        (void)setsid();
+        pid_t grand = fork();
+        if (grand != 0) _exit(0);
+
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            (void)dup2(devnull, STDIN_FILENO);
+            (void)dup2(devnull, STDOUT_FILENO);
+            (void)dup2(devnull, STDERR_FILENO);
+            if (devnull > STDERR_FILENO) close(devnull);
+        }
+        static const char script[] =
+            "pid=\"$1\"; app=\"$2\"; i=0; "
+            "while kill -0 \"$pid\" 2>/dev/null && [ \"$i\" -lt 100 ]; do "
+            "sleep 0.05; i=$((i + 1)); "
+            "done; "
+            "/usr/bin/open -n \"$app\"";
+        execl("/bin/sh", "sh", "-c", script, "relaunch", pid_str, relaunch_path, (char *)NULL);
+        _exit(127);
+    }
+    int status = 0;
+    (void)waitpid(pid, &status, 0);
+    return true;
 }

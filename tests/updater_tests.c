@@ -1,0 +1,91 @@
+#include "updater.h"
+#include <stdio.h>
+#include <string.h>
+
+static int failures = 0;
+
+#define CHECK(expr) do { \
+    if (!(expr)) { \
+        fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #expr); \
+        ++failures; \
+    } \
+} while (0)
+
+static void test_valid_repo(void) {
+    CHECK(app_updater_valid_repo("mzgs/C-GUI-Template"));
+    CHECK(app_updater_valid_repo("owner_1/repo.name-2"));
+    CHECK(!app_updater_valid_repo(NULL));
+    CHECK(!app_updater_valid_repo(""));
+    CHECK(!app_updater_valid_repo("noslash"));
+    CHECK(!app_updater_valid_repo("/repo"));
+    CHECK(!app_updater_valid_repo("owner/"));
+    CHECK(!app_updater_valid_repo("a/b/c"));
+    CHECK(!app_updater_valid_repo("owner/../repo"));
+    CHECK(!app_updater_valid_repo("owner/repo..name"));
+    CHECK(!app_updater_valid_repo("owner/repo with space"));
+}
+
+static void test_extract_release_tag(void) {
+    char tag[64];
+
+    CHECK(app_updater_extract_release_tag(
+        "https://github.com/mzgs/C-GUI-Template/releases/tag/v0.1.5", tag, sizeof tag));
+    CHECK(strcmp(tag, "v0.1.5") == 0);
+
+    CHECK(app_updater_extract_release_tag(
+        "https://github.com/mzgs/C-GUI-Template/releases/tag/v1.2.3-beta.1?foo=bar", tag, sizeof tag));
+    CHECK(strcmp(tag, "v1.2.3-beta.1") == 0);
+
+    CHECK(app_updater_extract_release_tag(
+        "https://github.com/mzgs/C-GUI-Template/releases/tag/0.2.0#notes", tag, sizeof tag));
+    CHECK(strcmp(tag, "0.2.0") == 0);
+
+    CHECK(!app_updater_extract_release_tag(
+        "https://github.com/mzgs/C-GUI-Template/releases", tag, sizeof tag));
+    CHECK(!app_updater_extract_release_tag(
+        "https://github.com/mzgs/C-GUI-Template/releases/tag/", tag, sizeof tag));
+    CHECK(!app_updater_extract_release_tag(
+        "https://github.com/mzgs/C-GUI-Template/releases/tag/..", tag, sizeof tag));
+    CHECK(!app_updater_extract_release_tag(
+        "https://github.com/mzgs/C-GUI-Template/releases/tag/v1.0%20bad", tag, sizeof tag));
+
+    char tiny[4];
+    CHECK(!app_updater_extract_release_tag(
+        "https://github.com/mzgs/C-GUI-Template/releases/tag/v0.1.5", tiny, sizeof tiny));
+}
+
+static void test_compare_versions(void) {
+    CHECK(app_updater_compare_versions("v0.1.5", "0.1.4") == 1);
+    CHECK(app_updater_compare_versions("0.1.5", "0.1.4") == 1);
+    CHECK(app_updater_compare_versions("0.2.0", "0.1.9") == 1);
+    CHECK(app_updater_compare_versions("1.0.0", "0.99.99") == 1);
+    CHECK(app_updater_compare_versions("0.10.0", "0.2.0") == 1);
+    CHECK(app_updater_compare_versions("V1.2.3.4", "1.2.3.3") == 1);
+
+    CHECK(app_updater_compare_versions("v0.1.4", "0.1.4") == 0);
+    CHECK(app_updater_compare_versions("1.2", "1.2.0") == 0);
+    CHECK(app_updater_compare_versions("1.2.0+build5", "1.2.0") == 0);
+
+    CHECK(app_updater_compare_versions("v0.1.3", "0.1.4") == -1);
+    CHECK(app_updater_compare_versions("0.1.5-rc.1", "0.1.5") == -1);
+    CHECK(app_updater_compare_versions("0.1.5", "0.1.5-rc.1") == 1);
+
+    CHECK(app_updater_compare_versions("", "0.1.4") == -2);
+    CHECK(app_updater_compare_versions("invalid", "0.1.4") == -2);
+    CHECK(app_updater_compare_versions("1", "0.1.4") == -2);
+    CHECK(app_updater_compare_versions("1.2.3.4.5", "0.1.4") == -2);
+    CHECK(app_updater_compare_versions("1.2.", "0.1.4") == -2);
+    CHECK(app_updater_compare_versions("1.2.3-", "0.1.4") == -2);
+}
+
+int main(void) {
+    test_valid_repo();
+    test_extract_release_tag();
+    test_compare_versions();
+    if (failures > 0) {
+        fprintf(stderr, "%d test(s) failed\n", failures);
+        return 1;
+    }
+    printf("updater_tests: all passed\n");
+    return 0;
+}
