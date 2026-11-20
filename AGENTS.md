@@ -9,7 +9,7 @@ or dependencies.
 - `main.c`: user-facing entry point (`app_state`, `on_action()`, `frame()`, `main()`).
 - `resources/`: app icons (`app.png`, `app.icns`, `app.ico`, `generate_icons.sh`) and OS metadata templates (`Info.plist.in`, `app.rc.in`, `app.desktop.in`).
 - `src/chrome/`: app chrome (`app_chrome.{h,c}`, `settings_dialog.c`, `command_palette.c`).
-- `src/log/`: thread-safe, size-capped file logging (`app_log.{h,c}`).
+- `src/log/`: thread-safe, size-capped file logging and crash signal handlers (`app_log.{h,c}`).
 - `src/settings/`: JSON persistence, atomic writes, and keybinding helpers (`settings.{h,c}`).
 - `src/platform/`: OS-specific dark mode, window positioning, and macOS native menu bar (`platform.h`, `platform_*.{c,m}`, `app_menu.h`, `app_menu_macos.m`).
 

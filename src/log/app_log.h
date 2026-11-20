@@ -17,6 +17,13 @@ typedef enum {
 bool app_log_init(const char *path, size_t max_bytes);
 void app_log_shutdown(void);
 
+/* Install OS crash handlers (SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGILL on POSIX;
+ * unhandled exceptions and SIGABRT on Windows) that append a crash summary and
+ * stack trace to the active log file and stderr before letting the OS terminate
+ * the process normally. Safe to call multiple times. */
+void app_log_install_crash_handler(void);
+void app_log_uninstall_crash_handler(void);
+
 /* Minimum level written to the log file (default: APP_LOG_INFO). */
 void app_log_set_level(app_log_level level);
 app_log_level app_log_get_level(void);

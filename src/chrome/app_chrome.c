@@ -267,6 +267,7 @@ void app_chrome_shutdown(app_chrome *chrome) {
         chrome->updater = NULL;
     }
     app_log_info("Shutting down %s", APP_NAME);
+    app_log_uninstall_crash_handler();
     app_log_shutdown();
 }
 
@@ -630,6 +631,7 @@ bool app_chrome_init(app_chrome *chrome, int argc, char **argv, int *exit_code) 
             app_log_init(log_path, 0);
         }
     }
+    app_log_install_crash_handler();
     app_log_info("Starting %s %s", APP_NAME, APP_VERSION);
     app_settings_load(&chrome->settings, chrome->cli.settings_path);
     const char *env_theme = getenv("CUI_THEME");

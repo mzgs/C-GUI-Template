@@ -7,6 +7,9 @@
 #include <process.h>
 #define getpid _getpid
 #else
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #endif
 
@@ -91,9 +94,87 @@ static void test_rotation(void) {
     remove(backup);
 }
 
+static void test_crash_handler(void) {
+#ifdef _WIN32
+    app_log_install_crash_handler();
+    app_log_install_crash_handler();
+    app_log_uninstall_crash_handler();
+    app_log_uninstall_crash_handler();
+#else
+    char path[1024], backup[1024];
+    temp_log_paths("crash", path, sizeof path, backup, sizeof backup);
+
+    fflush(stdout);
+    fflush(stderr);
+    pid_t pid = fork();
+    CHECK(pid >= 0);
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        if (!app_log_init(path, 65536)) _exit(99);
+        app_log_install_crash_handler();
+        app_log_install_crash_handler(); /* idempotent */
+        abort();
+        _exit(98);
+    }
+    if (pid > 0) {
+        int status = 0;
+        CHECK(waitpid(pid, &status, 0) == pid);
+        CHECK(WIFSIGNALED(status));
+        CHECK(WTERMSIG(status) == SIGABRT);
+
+        char content[8192];
+        CHECK(read_all(path, content, sizeof content));
+        CHECK(strstr(content, " UTC [FATAL] Crash in ") != NULL);
+        CHECK(strstr(content, "signal SIGABRT") != NULL);
+#if defined(__APPLE__) || (defined(__linux__) && defined(__GLIBC__))
+        CHECK(strstr(content, "Backtrace (") != NULL);
+#endif
+    }
+    remove(path);
+    remove(backup);
+
+    /* Uninstalled handler should not log [FATAL] and should still terminate with SIGABRT. */
+    temp_log_paths("crash_uninstalled", path, sizeof path, backup, sizeof backup);
+    fflush(stdout);
+    fflush(stderr);
+    pid = fork();
+    CHECK(pid >= 0);
+    if (pid == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+        if (!app_log_init(path, 65536)) _exit(99);
+        app_log_install_crash_handler();
+        app_log_uninstall_crash_handler();
+        app_log_uninstall_crash_handler(); /* idempotent */
+        abort();
+        _exit(98);
+    }
+    if (pid > 0) {
+        int status = 0;
+        CHECK(waitpid(pid, &status, 0) == pid);
+        CHECK(WIFSIGNALED(status));
+        CHECK(WTERMSIG(status) == SIGABRT);
+
+        char content[1024] = "";
+        CHECK(read_all(path, content, sizeof content));
+        CHECK(strstr(content, "[FATAL]") == NULL);
+    }
+    remove(path);
+    remove(backup);
+#endif
+}
+
 int main(void) {
     test_write_and_filter();
     test_rotation();
+    test_crash_handler();
     if (failures > 0) {
         fprintf(stderr, "%d test(s) failed.\n", failures);
         return 1;
