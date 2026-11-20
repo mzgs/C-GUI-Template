@@ -45,7 +45,6 @@ int main(int argc, char **argv) {
             .default_combo = { CUI_MOD_PRIMARY, CUI_KEY_F },
             .on_trigger = on_find,
         },
-         
     };
 
     int exit_code = 0;

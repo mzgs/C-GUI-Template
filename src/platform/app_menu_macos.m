@@ -112,6 +112,7 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
 - (void)triggerPalette:(id)sender;
 - (void)toggleFullscreen:(id)sender;
 - (void)triggerEditKey:(NSMenuItem *)sender;
+- (void)quitApp:(id)sender;
 - (void)windowDidMove:(NSNotification *)note;
 - (void)appWillTerminate:(NSNotification *)note;
 @end
@@ -180,11 +181,26 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
     [self requestRedraw];
 }
 
+- (void)quitApp:(id)sender {
+    (void)sender;
+    if (self.onWillTerminate) self.onWillTerminate(self.user);
+    cui_app_quit(NULL);
+    [self requestRedraw];
+}
+
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
+    bool isKeyEvent = (NSApp.currentEvent.type == NSEventTypeKeyDown);
+    cui_ctx *ui = cui_app_ui(NULL);
+    bool modalOpen = (self.settingsOpen && *self.settingsOpen) ||
+                     (self.paletteOpen && *self.paletteOpen);
+
+    if (item.action == @selector(triggerPalette:)) {
+        if (isKeyEvent && (modalOpen || (ui && cui_wants_keyboard(ui)))) return NO;
+        return YES;
+    }
     if (item.action == @selector(triggerAction:)) {
-        bool blocked = (self.settingsOpen && *self.settingsOpen) ||
-                       (self.paletteOpen && *self.paletteOpen);
-        if (blocked) return NO;
+        if (modalOpen) return NO;
+        if (isKeyEvent && ui && cui_wants_keyboard(ui)) return NO;
         int tag = (int)item.tag;
         for (int i = 0; i < _cachedActionCount; ++i) {
             if (_cachedActions[i].action_index == tag) {
@@ -254,6 +270,14 @@ void app_menu_install(const app_menu_hooks *hooks) {
     [appMenu insertItem:[NSMenuItem separatorItem] atIndex:1];
     [appMenu insertItem:settings atIndex:2];
     [appMenu insertItem:[NSMenuItem separatorItem] atIndex:3];
+
+    /* Route Quit through cui_app_quit so cui_app_run() exits cleanly and runs shutdown hooks. */
+    for (NSMenuItem *item in appMenu.itemArray) {
+        if (item.action == @selector(terminate:)) {
+            item.target = target;
+            item.action = @selector(quitApp:);
+        }
+    }
 
     /* File menu (populated dynamically from registered APP_MENU_FILE actions) */
     NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];

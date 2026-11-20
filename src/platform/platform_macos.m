@@ -89,6 +89,19 @@ void app_window_apply_metadata(void *native_window, const char *backend) {
     (void)backend;
 }
 
+void app_window_set_dark(void *native_window, const char *backend, bool dark) {
+    if (!native_window || !backend || strcmp(backend, "cocoa") != 0) return;
+    if (@available(macOS 10.14, *)) {
+        @autoreleasepool {
+            NSWindow *win = (__bridge NSWindow *)native_window;
+            NSAppearanceName desired = dark ? NSAppearanceNameDarkAqua : NSAppearanceNameAqua;
+            if (![win.appearance.name isEqualToString:desired]) {
+                win.appearance = [NSAppearance appearanceNamed:desired];
+            }
+        }
+    }
+}
+
 static void macos_set_err(char *err, size_t err_cap, const char *msg) {
     if (!err || err_cap == 0) return;
     snprintf(err, err_cap, "%s", msg ? msg : "Unknown error.");

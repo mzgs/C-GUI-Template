@@ -20,10 +20,15 @@ function(app_escape_xml out_var value)
     set(${out_var} "${value}" PARENT_SCOPE)
 endfunction()
 
-function(app_escape_rc out_var value)
+function(app_escape_c out_var value)
     string(REPLACE "\\" "\\\\" value "${value}")
     string(REPLACE "\"" "\\\"" value "${value}")
     set(${out_var} "${value}" PARENT_SCOPE)
+endfunction()
+
+function(app_escape_rc out_var value)
+    app_escape_c(escaped "${value}")
+    set(${out_var} "${escaped}" PARENT_SCOPE)
 endfunction()
 
 find_package(Threads REQUIRED)
@@ -37,13 +42,18 @@ FetchContent_Declare(yyjson
     GIT_TAG 6447536015f3d600f3d65323b10976103b337ca7)
 FetchContent_MakeAvailable(cui yyjson)
 
+app_escape_c(APP_C_NAME "${APP_NAME}")
+app_escape_c(APP_C_DESCRIPTION "${APP_DESCRIPTION}")
+app_escape_c(APP_C_BUNDLE_ID "${APP_BUNDLE_ID}")
+app_escape_c(APP_C_GITHUB_REPO "${APP_GITHUB_REPO}")
+
 add_library(app_common INTERFACE)
 target_compile_definitions(app_common INTERFACE
-    "APP_NAME=\"${APP_NAME}\""
-    "APP_DESCRIPTION=\"${APP_DESCRIPTION}\""
-    "APP_BUNDLE_ID=\"${APP_BUNDLE_ID}\""
+    "APP_NAME=\"${APP_C_NAME}\""
+    "APP_DESCRIPTION=\"${APP_C_DESCRIPTION}\""
+    "APP_BUNDLE_ID=\"${APP_C_BUNDLE_ID}\""
     "APP_VERSION=\"${PROJECT_VERSION}\""
-    "APP_GITHUB_REPO=\"${APP_GITHUB_REPO}\"")
+    "APP_GITHUB_REPO=\"${APP_C_GITHUB_REPO}\"")
 if(MSVC)
     target_compile_options(app_common INTERFACE /utf-8 /W4)
 else()
@@ -90,7 +100,7 @@ if(APPLE)
 endif()
 
 add_executable(empty_gui MACOSX_BUNDLE main.c)
-target_link_libraries(empty_gui PRIVATE app_chrome app_common cui::cui)
+target_link_libraries(empty_gui PRIVATE app_chrome app_common)
 cui_app_target(empty_gui)
 install(TARGETS empty_gui
     BUNDLE DESTINATION . COMPONENT app

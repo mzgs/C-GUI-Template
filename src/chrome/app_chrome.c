@@ -309,6 +309,10 @@ void chrome_apply_appearance(app_chrome *chrome, cui_ctx *ui) {
         cui_theme_mode target = resolve_theme_mode(chrome->settings.appearance.theme_mode, current);
         cui_set_theme(ui, target);
     }
+    if (cui_app_ui(NULL) == ui) {
+        app_window_set_dark(cui_app_native_window(NULL), cui_app_backend(NULL),
+                            cui_get_theme_mode(ui) == CUI_THEME_DARK);
+    }
     if (!chrome->env_accent_override) {
         cui_set_accent(ui, chrome->settings.appearance.accent);
     }
@@ -350,16 +354,31 @@ static void observe_window_pos(app_chrome *chrome) {
     chrome->observed_window_y = y;
 }
 
-void chrome_reset_window(app_chrome *chrome, cui_ctx *ui) {
-    if (cui_app_ui(NULL) != ui) return;
-    if (cui_app_is_fullscreen(NULL)) cui_app_set_fullscreen(NULL, false);
+static void apply_window_reset_bounds(app_chrome *chrome) {
     cui_app_set_size(NULL, chrome->settings.window.width, chrome->settings.window.height);
     app_window_center(cui_app_native_window(NULL), cui_app_backend(NULL));
     observe_window_pos(chrome);
 }
 
+void chrome_reset_window(app_chrome *chrome, cui_ctx *ui) {
+    if (cui_app_ui(NULL) != ui) return;
+    chrome->window_fullscreen_pending = false;
+    chrome->window_reset_pending = false;
+    if (cui_app_is_fullscreen(NULL)) {
+        cui_app_set_fullscreen(NULL, false);
+        if (cui_app_is_fullscreen(NULL)) {
+            chrome->window_reset_pending = true;
+            chrome->window_reset_since = cui_time(ui);
+            cui_request_wakeup(ui, 0.05f);
+            return;
+        }
+    }
+    apply_window_reset_bounds(chrome);
+}
+
 static bool capture_live_window_bounds(app_chrome *chrome) {
-    if (!cui_app_ui(NULL) || chrome->window_fullscreen_pending) return false;
+    if (!cui_app_ui(NULL) || chrome->window_fullscreen_pending || chrome->window_reset_pending)
+        return false;
     bool changed = false;
     bool fs = cui_app_is_fullscreen(NULL);
     if (fs != chrome->settings.window.fullscreen) {
@@ -585,6 +604,7 @@ static void sync_window_state(app_chrome *chrome, cui_ctx *ui) {
     if (chrome->window_state_ui != ui) {
         chrome->window_state_ui = ui;
         chrome->window_fullscreen_pending = false;
+        chrome->window_reset_pending = false;
         const char *backend = cui_app_backend(NULL);
         app_log_info("Window ready (backend=%s, renderer=%s)",
                      backend ? backend : "unknown",
@@ -610,11 +630,22 @@ static void sync_window_state(app_chrome *chrome, cui_ctx *ui) {
             }
         }
     }
+    if (chrome->window_reset_pending) {
+        if (!cui_app_is_fullscreen(NULL)) {
+            chrome->window_reset_pending = false;
+            apply_window_reset_bounds(chrome);
+        } else if (cui_time(ui) - chrome->window_reset_since >= 2.0) {
+            chrome->window_reset_pending = false;
+        } else {
+            cui_request_wakeup(ui, 0.05f);
+        }
+    }
     if (chrome->window_fullscreen_pending) {
         if (cui_app_is_fullscreen(NULL) || (cui_time(ui) - chrome->window_fullscreen_since >= 1.5))
             chrome->window_fullscreen_pending = false;
     }
-    if (!chrome->window_fullscreen_pending && capture_live_window_bounds(chrome)) {
+    if (!chrome->window_fullscreen_pending && !chrome->window_reset_pending &&
+        capture_live_window_bounds(chrome)) {
         chrome->window_dirty_since = cui_time(ui);
     }
     if (chrome->window_dirty) {

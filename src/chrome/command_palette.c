@@ -1,4 +1,5 @@
 #include "chrome_internal.h"
+#include <stdint.h>
 #include <string.h>
 
 enum {
@@ -185,8 +186,10 @@ static void populate_palette(app_chrome *chrome, cui_ctx *ui, app_palette_builde
 static const char *rebase_pool_ptr(const char *ptr, const char *src_base, size_t src_len,
                                    const char *dst_base) {
     if (!ptr) return NULL;
-    if (ptr >= src_base && ptr < src_base + src_len) {
-        return dst_base + (size_t)(ptr - src_base);
+    uintptr_t p = (uintptr_t)ptr;
+    uintptr_t base = (uintptr_t)src_base;
+    if (p >= base && p - base < src_len) {
+        return dst_base + (size_t)(p - base);
     }
     return ptr;
 }

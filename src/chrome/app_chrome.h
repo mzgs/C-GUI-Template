@@ -116,6 +116,8 @@ typedef struct {
     double window_dirty_since;
     bool window_fullscreen_pending;
     double window_fullscreen_since;
+    bool window_reset_pending;
+    double window_reset_since;
     bool observed_window_has_pos;
     int observed_window_x;
     int observed_window_y;

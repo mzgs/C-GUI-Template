@@ -166,6 +166,12 @@ void app_window_apply_metadata(void *native_window, const char *backend) {
 #endif
 }
 
+void app_window_set_dark(void *native_window, const char *backend, bool dark) {
+    (void)native_window;
+    (void)backend;
+    (void)dark;
+}
+
 static void linux_set_err(char *err, size_t err_cap, const char *msg) {
     if (!err || err_cap == 0) return;
     snprintf(err, err_cap, "%s", msg ? msg : "Unknown error.");

@@ -20,6 +20,7 @@ bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y
 bool app_window_set_pos(void *native_window, const char *backend, int x, int y);
 void app_window_center(void *native_window, const char *backend);
 void app_window_apply_metadata(void *native_window, const char *backend);
+void app_window_set_dark(void *native_window, const char *backend, bool dark);
 
 #ifdef __APPLE__
 /* Resolve the default per-user macOS settings.json path. */

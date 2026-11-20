@@ -661,7 +661,7 @@ awk '
         while ((pos = index(rest, old_t)) > 0) {
             before = (pos > 1) ? substr(rest, pos - 1, 1) : ""
             after = (pos + ol <= length(rest)) ? substr(rest, pos + ol, 1) : ""
-            if (before !~ /[A-Za-z0-9_-]/ && after !~ /[A-Za-z0-9_-]/) {
+            if (before !~ /[A-Za-z0-9_.\/-]/ && after !~ /[A-Za-z0-9_.\/-]/) {
                 out = out substr(rest, 1, pos - 1) new_t
             } else {
                 out = out substr(rest, 1, pos + ol - 1)
@@ -669,6 +669,10 @@ awk '
             rest = substr(rest, pos + ol)
         }
         return out rest
+    }
+    function is_target_line(line) {
+        return line ~ /^[[:space:]]*(add_executable|target_link_libraries|cui_app_target|install\(TARGETS|target_sources|set_target_properties|add_custom_target\(run|get_target_property|set\(APP_(WIN32|LINUX)_OUTPUT_NAME)[[:space:]\(]/ ||
+               index(line, "$<TARGET_FILE:") > 0
     }
     {
         line = $0
@@ -688,7 +692,9 @@ awk '
             print line
             next
         }
-        line = replace_token(line, ENVIRON["OLD_TARGET"], ENVIRON["NEW_TARGET"])
+        if (is_target_line(line)) {
+            line = replace_token(line, ENVIRON["OLD_TARGET"], ENVIRON["NEW_TARGET"])
+        }
         print line
     }
 ' CMakeLists.txt > "$TMP_DIR/CMakeLists.txt"
