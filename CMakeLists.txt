@@ -27,8 +27,9 @@ function(app_escape_c out_var value)
 endfunction()
 
 function(app_escape_rc out_var value)
-    app_escape_c(escaped "${value}")
-    set(${out_var} "${escaped}" PARENT_SCOPE)
+    string(REPLACE "\\" "\\\\" value "${value}")
+    string(REPLACE "\"" "\"\"" value "${value}")
+    set(${out_var} "${value}" PARENT_SCOPE)
 endfunction()
 
 find_package(Threads REQUIRED)

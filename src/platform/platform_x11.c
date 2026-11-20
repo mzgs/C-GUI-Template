@@ -201,17 +201,21 @@ static bool linux_run_process(char *const argv[], char *out, size_t out_cap) {
         return false;
     }
     if (pid == 0) {
+        if (pipefd[1] >= 0) {
+            if (pipefd[1] != STDOUT_FILENO) {
+                (void)dup2(pipefd[1], STDOUT_FILENO);
+                close(pipefd[1]);
+            }
+            if (pipefd[0] >= 0 && pipefd[0] != STDOUT_FILENO && pipefd[0] != pipefd[1]) {
+                close(pipefd[0]);
+            }
+        }
         int devnull = open("/dev/null", O_RDWR);
         if (devnull >= 0) {
             (void)dup2(devnull, STDIN_FILENO);
             if (pipefd[1] < 0) (void)dup2(devnull, STDOUT_FILENO);
             (void)dup2(devnull, STDERR_FILENO);
             if (devnull > STDERR_FILENO) close(devnull);
-        }
-        if (pipefd[0] >= 0) close(pipefd[0]);
-        if (pipefd[1] >= 0) {
-            (void)dup2(pipefd[1], STDOUT_FILENO);
-            close(pipefd[1]);
         }
         execvp(argv[0], argv);
         _exit(127);

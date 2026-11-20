@@ -702,9 +702,6 @@ void app_chrome_begin_frame(app_chrome *chrome, cui_ctx *ui) {
         .actions = menu_actions,
         .action_count = menu_action_count,
     });
-    if (!chrome->settings_open && !chrome->palette_open && !cui_wants_keyboard(ui)) {
-        if (cui_shortcut(ui, CUI_MOD_PRIMARY | CUI_MOD_CTRL, CUI_KEY_F)) chrome_toggle_fullscreen();
-    }
     if (chrome->pending_action >= 0) {
         int queued = chrome->pending_action;
         chrome->pending_action = -1;
@@ -749,31 +746,48 @@ void app_chrome_begin_frame(app_chrome *chrome, cui_ctx *ui) {
             }
         }
     }
-    if (!chrome->settings_open && !chrome->palette_open && !cui_wants_keyboard(ui)) {
-        if (cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_COMMA)) chrome->settings_open = true;
-        else if (cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_Q)) cui_app_quit(NULL);
-        else if (cui_shortcut(ui, 0, CUI_KEY_F11)) chrome_toggle_fullscreen();
+#endif
+}
+
+static void handle_chrome_shortcuts(app_chrome *chrome, cui_ctx *ui) {
+    if (chrome->settings_open || chrome->palette_open || cui_wants_keyboard(ui)) return;
+#ifdef __APPLE__
+    if (chrome->injected_edit_key != CUI_KEY_NONE) return;
+    if (cui_shortcut(ui, CUI_MOD_PRIMARY | CUI_MOD_CTRL, CUI_KEY_F)) {
+        chrome_toggle_fullscreen();
+        return;
+    }
+#else
+    if (cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_COMMA)) {
+        chrome->settings_open = true;
+        return;
+    }
+    if (cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_Q)) {
+        cui_app_quit(NULL);
+        return;
+    }
+    if (cui_shortcut(ui, 0, CUI_KEY_F11)) {
+        chrome_toggle_fullscreen();
+        return;
     }
 #endif
-
-    if (!chrome->settings_open && !chrome->palette_open) {
-        if (app_keybinding_pressed(ui, &chrome->settings, chrome->command_palette_kb)) {
-            chrome->palette_open = true;
-        } else if (!cui_wants_keyboard(ui)) {
-            for (int i = 0; i < chrome->action_count; ++i) {
-                const app_registered_action *action = &chrome->actions[i];
-                if (!action->enabled) continue;
-                cui_key_combo combo = chrome_action_combo(chrome, action);
-                if (combo.key != CUI_KEY_NONE && cui_shortcut(ui, combo.mods, combo.key)) {
-                    chrome_trigger_action_index(chrome, ui, i);
-                    break;
-                }
-            }
+    if (app_keybinding_pressed(ui, &chrome->settings, chrome->command_palette_kb)) {
+        chrome->palette_open = true;
+        return;
+    }
+    for (int i = 0; i < chrome->action_count; ++i) {
+        const app_registered_action *action = &chrome->actions[i];
+        if (!action->enabled) continue;
+        cui_key_combo combo = chrome_action_combo(chrome, action);
+        if (combo.key != CUI_KEY_NONE && cui_shortcut(ui, combo.mods, combo.key)) {
+            chrome_trigger_action_index(chrome, ui, i);
+            break;
         }
     }
 }
 
 void app_chrome_end_frame(app_chrome *chrome, cui_ctx *ui) {
+    handle_chrome_shortcuts(chrome, ui);
     chrome_draw_command_palette(chrome, ui);
     chrome_draw_settings_dialog(chrome, ui);
     chrome_poll_updater(chrome, ui);

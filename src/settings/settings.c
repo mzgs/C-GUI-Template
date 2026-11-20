@@ -207,12 +207,30 @@ bool app_keybinding_pressed(cui_ctx *ui, const app_settings *settings, int index
     return combo.key != CUI_KEY_NONE && cui_shortcut(ui, combo.mods, combo.key);
 }
 
+static bool is_reserved_combo(cui_key_combo combo) {
+    if (combo.key == CUI_KEY_COMMA && combo.mods == CUI_MOD_PRIMARY)
+        return true;
+#ifdef __APPLE__
+    if (combo.key == CUI_KEY_F && combo.mods == (CUI_MOD_PRIMARY | CUI_MOD_CTRL))
+        return true;
+    if (combo.mods == CUI_MOD_PRIMARY &&
+        (combo.key == CUI_KEY_Q || combo.key == CUI_KEY_W ||
+         combo.key == CUI_KEY_M || combo.key == CUI_KEY_H))
+        return true;
+#else
+    if (combo.key == CUI_KEY_Q && combo.mods == CUI_MOD_PRIMARY)
+        return true;
+    if (combo.key == CUI_KEY_F11 && combo.mods == 0)
+        return true;
+#endif
+    return false;
+}
+
 int app_keybinding_conflict(const app_settings *settings, int index) {
     if (!settings || index < 0 || index >= settings->keybinding_count) return APP_CONFLICT_NONE;
     cui_key_combo combo = settings->keybindings[index].combo;
     if (combo.key == CUI_KEY_NONE) return APP_CONFLICT_NONE;
-    if (combo.key == CUI_KEY_COMMA && combo.mods == CUI_MOD_PRIMARY)
-        return APP_CONFLICT_SETTINGS;
+    if (is_reserved_combo(combo)) return APP_CONFLICT_SETTINGS;
     for (int i = 0; i < settings->keybinding_count; ++i) {
         if (i == index) continue;
         cui_key_combo other = settings->keybindings[i].combo;

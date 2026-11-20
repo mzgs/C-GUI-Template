@@ -213,7 +213,7 @@ static bool draw_about_section(app_chrome *chrome, cui_ctx *ui) {
     if (APP_DESCRIPTION[0]) cui_secondary(ui, APP_DESCRIPTION);
 
     if (app_updater_configured()) {
-        if (!chrome->update_auto_checked) {
+        if (chrome->settings_open && !chrome->update_auto_checked) {
             chrome_check_for_updates(chrome, false);
         }
         app_update_snapshot upd;
@@ -327,7 +327,7 @@ void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {
 
     cui_dialog(ui, "Settings", &chrome->settings_open, .width = size.x * 0.9f) {
         /* shortcut: pinned CUI adds 94pt for the header, padding and gap; revisit if its layout changes. */
-        cui_column(ui, .height = CUI_PX(fminf(size.y * 0.9f, size.y - 48) - 94)) {
+        cui_column(ui, .height = CUI_PX(fmaxf(0.0f, fminf(size.y * 0.9f, size.y - 48) - 94))) {
             cui_row(ui, .height = CUI_FILL, .gap = 16, .align = CUI_ALIGN_STRETCH) {
                 cui_column(ui, .width = CUI_PCT(30), .min_width = 128, .max_width = 180,
                            .height = CUI_FILL) {

@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #include "platform.h"
+#include <errno.h>
 #include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
@@ -433,6 +434,8 @@ bool app_updater_relaunch(const char *relaunch_path) {
         _exit(127);
     }
     int status = 0;
-    (void)waitpid(pid, &status, 0);
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) break;
+    }
     return true;
 }

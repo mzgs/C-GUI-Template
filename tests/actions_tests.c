@@ -233,6 +233,19 @@ static void test_deferred_keybindings_persistence_and_reset(void) {
 
     chrome.settings.keybindings[find_kb].combo = (cui_key_combo){ CUI_MOD_PRIMARY, CUI_KEY_COMMA };
     CHECK(app_keybinding_conflict(&chrome.settings, find_kb) == APP_CONFLICT_SETTINGS);
+#ifdef __APPLE__
+    chrome.settings.keybindings[find_kb].combo = (cui_key_combo){ CUI_MOD_PRIMARY | CUI_MOD_CTRL, CUI_KEY_F };
+    CHECK(app_keybinding_conflict(&chrome.settings, find_kb) == APP_CONFLICT_SETTINGS);
+    chrome.settings.keybindings[find_kb].combo = (cui_key_combo){ CUI_MOD_PRIMARY, CUI_KEY_Q };
+    CHECK(app_keybinding_conflict(&chrome.settings, find_kb) == APP_CONFLICT_SETTINGS);
+    chrome.settings.keybindings[find_kb].combo = (cui_key_combo){ CUI_MOD_PRIMARY, CUI_KEY_W };
+    CHECK(app_keybinding_conflict(&chrome.settings, find_kb) == APP_CONFLICT_SETTINGS);
+#else
+    chrome.settings.keybindings[find_kb].combo = (cui_key_combo){ CUI_MOD_PRIMARY, CUI_KEY_Q };
+    CHECK(app_keybinding_conflict(&chrome.settings, find_kb) == APP_CONFLICT_SETTINGS);
+    chrome.settings.keybindings[find_kb].combo = (cui_key_combo){ 0, CUI_KEY_F11 };
+    CHECK(app_keybinding_conflict(&chrome.settings, find_kb) == APP_CONFLICT_SETTINGS);
+#endif
 
     /* Restore find to cleared and save to disk */
     chrome.settings.keybindings[find_kb].combo = (cui_key_combo){ 0, CUI_KEY_NONE };
@@ -331,10 +344,118 @@ static void test_palette_provider_and_group_coalescing(void) {
     remove(path);
 }
 
+static void test_shortcuts_and_text_focus(void) {
+    char path[1024];
+    temp_settings_path("shortcuts", path, sizeof path);
+
+    app_chrome chrome;
+    init_test_chrome(&chrome, path);
+
+    test_state st = { 0 };
+    const app_action_desc actions[] = {
+        {
+            .id = "save",
+            .title = "Save",
+            .default_combo = { CUI_MOD_PRIMARY, CUI_KEY_S },
+            .on_trigger = on_save,
+        },
+        {
+            .id = "clash_fs",
+            .title = "Clash Fullscreen",
+#ifdef __APPLE__
+            .default_combo = { CUI_MOD_PRIMARY | CUI_MOD_CTRL, CUI_KEY_F },
+#else
+            .default_combo = { 0, CUI_KEY_F11 },
+#endif
+            .on_trigger = on_custom,
+        },
+    };
+    CHECK(app_chrome_register_actions(&chrome, actions, 2, &st) == 2);
+
+    cui_ctx *ui = cui_create(NULL);
+    CHECK(ui != NULL);
+    cui_set_viewport(ui, 800, 600, 1.0f);
+    cui_set_reduced_motion(ui, true);
+
+    char text_buf[64] = "";
+    cui_id input_id = 0;
+
+    /* Layout frame to discover the input rect. */
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    cui_input(ui, "test-input", text_buf, sizeof text_buf);
+    input_id = cui_make_id(ui, "test-input");
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+
+    /* Unfocused: Save shortcut triggers normally. */
+    cui_input_key(ui, CUI_KEY_S, true, CUI_MOD_PRIMARY);
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    cui_input(ui, "test-input", text_buf, sizeof text_buf);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_key(ui, CUI_KEY_S, false, 0);
+    CHECK(st.save_calls == 1);
+
+    /* Built-in fullscreen shortcut must not double-fire a clashing action. */
+#ifdef __APPLE__
+    cui_input_key(ui, CUI_KEY_F, true, CUI_MOD_PRIMARY | CUI_MOD_CTRL);
+#else
+    cui_input_key(ui, CUI_KEY_F11, true, 0);
+#endif
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    cui_input(ui, "test-input", text_buf, sizeof text_buf);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+#ifdef __APPLE__
+    cui_input_key(ui, CUI_KEY_F, false, 0);
+#else
+    cui_input_key(ui, CUI_KEY_F11, false, 0);
+#endif
+    CHECK(st.custom_calls == 0);
+
+    /* Click to focus the text input. */
+    cui_rect r = cui_get_rect(ui, input_id);
+    cui_input_mouse_move(ui, r.x + r.w * 0.5f, r.y + r.h * 0.5f);
+    cui_input_mouse_button(ui, CUI_MOUSE_LEFT, true);
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    cui_input(ui, "test-input", text_buf, sizeof text_buf);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_mouse_button(ui, CUI_MOUSE_LEFT, false);
+
+    /* Focused text input: global Save and Command Palette shortcuts must be suppressed. */
+    cui_input_key(ui, CUI_KEY_S, true, CUI_MOD_PRIMARY);
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    cui_input(ui, "test-input", text_buf, sizeof text_buf);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_key(ui, CUI_KEY_S, false, 0);
+    CHECK(st.save_calls == 1);
+
+    cui_input_key(ui, CUI_KEY_K, true, CUI_MOD_PRIMARY);
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    cui_input(ui, "test-input", text_buf, sizeof text_buf);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_key(ui, CUI_KEY_K, false, 0);
+    CHECK(!chrome.palette_open);
+
+    cui_destroy(ui);
+    app_chrome_shutdown(&chrome);
+    remove(path);
+}
+
 int main(void) {
     test_registration_and_trigger();
     test_deferred_keybindings_persistence_and_reset();
     test_palette_provider_and_group_coalescing();
+    test_shortcuts_and_text_focus();
     if (failures > 0) {
         fprintf(stderr, "%d test(s) failed.\n", failures);
         return 1;

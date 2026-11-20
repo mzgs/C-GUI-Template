@@ -98,7 +98,7 @@ void app_settings_reset_keybindings(app_settings *settings);
 /* Keybinding dispatch and conflict detection. */
 bool app_keybinding_pressed(cui_ctx *ui, const app_settings *settings, int index);
 /* Returns another conflicting keybinding index, APP_CONFLICT_SETTINGS if it
- * matches the reserved Settings shortcut, or APP_CONFLICT_NONE. */
+ * matches a reserved built-in shortcut, or APP_CONFLICT_NONE. */
 int app_keybinding_conflict(const app_settings *settings, int index);
 
 #endif
