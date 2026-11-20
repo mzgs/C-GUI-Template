@@ -289,12 +289,27 @@ static void draw_about_section(app_chrome *chrome, cui_ctx *ui) {
     }
 
     cui_separator(ui);
-    const char *backend = cui_app_backend(NULL);
-    const char *renderer = cui_app_is_software(NULL) ? "Software" : "OpenGL";
-    char runtime_info[128];
-    snprintf(runtime_info, sizeof runtime_info, "Backend: %s  ·  Renderer: %s",
-             backend ? backend : "unknown", renderer);
-    cui_secondary(ui, runtime_info);
+    char debug_info[1536];
+    chrome_format_debug_info(chrome, ui, debug_info, sizeof debug_info);
+    const char *log_path = app_log_path();
+
+    cui_row(ui, .width = CUI_FILL, .gap = 8, .align = CUI_ALIGN_CENTER) {
+        cui_text(ui, "Diagnostics", .font = CUI_FONT_MEDIUM);
+        cui_spacer(ui);
+        if (log_path && log_path[0]) {
+            if (cui_button(ui, "Open Log", .icon = CUI_ICON_FILE_TEXT,
+                           .variant = CUI_BUTTON_GHOST, .size = CUI_SIZE_SM)) {
+                chrome_open_log_file(chrome, ui);
+            }
+        }
+        if (cui_copy_button(ui, "copy-debug-info", debug_info)) {
+            app_chrome_notify(chrome, ui, "Debug info copied to clipboard.", CUI_TONE_INFO);
+        }
+    }
+    cui_column(ui, .width = CUI_FILL, .bg = CUI_COLOR_SURFACE_MUTED,
+               .radius = 10, .pad_x = 12, .pad_y = 10) {
+        cui_text(ui, debug_info, .font = CUI_FONT_MONO, .size = 12, .selectable = true);
+    }
 }
 
 void chrome_draw_settings_dialog(app_chrome *chrome, cui_ctx *ui) {

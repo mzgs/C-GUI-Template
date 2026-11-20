@@ -3,6 +3,7 @@
 #endif
 
 #include "updater.h"
+#include "app_log.h"
 #include "platform.h"
 #include <ctype.h>
 #include <limits.h>
@@ -235,6 +236,12 @@ static void run_check_worker(app_updater *u) {
         }
     }
 
+    if (next.state == APP_UPDATE_AVAILABLE) {
+        app_log_info("Update available: %s (current %s)", next.latest_tag, current_ver);
+    } else if (next.state == APP_UPDATE_ERROR) {
+        app_log_warn("Update check failed: %s", next.error[0] ? next.error : "unknown error");
+    }
+
     mutex_lock(&u->mu);
     if (!u->destroyed) {
         u->snap = next;
@@ -263,6 +270,11 @@ static void run_install_worker(app_updater *u) {
     char err[256] = "";
     bool ok = app_updater_install_release(repo, tag, relaunch_path, sizeof relaunch_path,
                                           install_should_abort, u, err, sizeof err);
+    if (ok) {
+        app_log_info("Installed update %s (%s)", tag, relaunch_path);
+    } else {
+        app_log_error("Update install failed (%s): %s", tag, err[0] ? err : "unknown error");
+    }
 
     mutex_lock(&u->mu);
     if (!u->destroyed) {

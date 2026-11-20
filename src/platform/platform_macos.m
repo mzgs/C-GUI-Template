@@ -104,6 +104,18 @@ static const char *macos_release_arch(void) {
 #endif
 }
 
+bool app_os_info(char *out, size_t capacity) {
+    if (!out || capacity == 0) return false;
+    @autoreleasepool {
+        NSOperatingSystemVersion v = NSProcessInfo.processInfo.operatingSystemVersion;
+        const char *arch = macos_release_arch();
+        int n = snprintf(out, capacity, "macOS %ld.%ld.%ld (%s)",
+                         (long)v.majorVersion, (long)v.minorVersion, (long)v.patchVersion,
+                         arch ? arch : "unknown");
+        return n > 0 && (size_t)n < capacity;
+    }
+}
+
 static NSString *macos_user_agent(void) {
     return [NSString stringWithFormat:@"%s/%s", APP_NAME, APP_VERSION];
 }

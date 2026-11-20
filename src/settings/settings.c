@@ -3,6 +3,7 @@
 #endif
 
 #include "settings.h"
+#include "app_log.h"
 #include "platform.h"
 #include <yyjson.h>
 #include <ctype.h>
@@ -318,14 +319,14 @@ bool app_settings_load(app_settings *settings, const char *override) {
     FILE *file = fopen(path, "rb");
 #endif
     if (!file) {
-        if (errno != ENOENT) fputs("Could not read settings.json\n", stderr);
+        if (errno != ENOENT) app_log_warn("Could not read settings.json (errno=%d)", errno);
         return false;
     }
     yyjson_doc *doc = yyjson_read_fp(file, YYJSON_READ_ALLOW_BOM, NULL, NULL);
     fclose(file);
     yyjson_val *root = yyjson_doc_get_root(doc);
     if (!yyjson_is_obj(root)) {
-        fputs("Invalid settings.json\n", stderr);
+        app_log_warn("Invalid settings.json: root is not a JSON object");
         yyjson_doc_free(doc);
         return false;
     }
@@ -461,6 +462,6 @@ bool app_settings_save(const app_settings *settings, const char *override) {
     }
     bool saved = ok && write_settings(path, doc);
     yyjson_mut_doc_free(doc);
-    if (!saved) fputs("Could not save settings.json\n", stderr);
+    if (!saved) app_log_error("Could not save settings.json");
     return saved;
 }

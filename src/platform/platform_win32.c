@@ -22,6 +22,21 @@ int app_system_dark(void) {
     return value == 0 ? 1 : 0;
 }
 
+bool app_os_info(char *out, size_t capacity) {
+    if (!out || capacity == 0) return false;
+#if defined(_M_ARM64) || defined(__aarch64__)
+    const char *arch = "arm64";
+#elif defined(_M_X64) || defined(__x86_64__)
+    const char *arch = "x64";
+#elif defined(_M_IX86) || defined(__i386__)
+    const char *arch = "x86";
+#else
+    const char *arch = "unknown";
+#endif
+    int n = snprintf(out, capacity, "Windows (%s)", arch);
+    return n > 0 && (size_t)n < capacity;
+}
+
 bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y) {
     if (!native_window || !backend || !x || !y || strcmp(backend, "win32") != 0) return false;
     RECT r;

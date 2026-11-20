@@ -20,6 +20,7 @@ main.c                 App entry point (state, action handler, frame UI)
 resources/             App icons (app.png, app.icns, app.ico) & OS metadata templates
 src/
   chrome/              Lifecycle, CLI parsing, Settings dialog, Command Palette
+  log/                 Thread-safe, size-capped file logger (`app_log_*`)
   settings/            JSON persistence, atomic writes, keybinding dispatch & conflicts
   platform/            OS dark-mode detection, window positioning, macOS native menu bar
 ```
@@ -34,6 +35,7 @@ src/
 - **Keybindings with dispatch & conflict warnings**: Filter by action or key combination (case-insensitive), click a shortcut to rebind, or press Backspace to clear. Duplicate bindings and conflicts with the reserved Settings shortcut are highlighted.
 - **Command Palette**: Press **⌘K** on macOS or **Ctrl+K** on Windows/Linux (rebindable in Keybindings) to search navigation, theme switching, fullscreen, and app actions.
 - **Toast notifications & Settings file tools**: Import, export, reset (with confirmation), or reveal the settings folder directly from Settings. Unknown fields in imported `settings.json` files are safely ignored across versions.
+- **File logging & Diagnostics**: Thread-safe, size-capped logging (`app_log_info`/`warn`/`error`/`debug`) writes to `app.log` beside `settings.json` (1 MiB cap, rotating to `app.log.1`) so errors aren't lost when launched from Finder or Explorer. **Settings → About** includes a one-click **Copy** button for debug info (version, OS/arch, backend, renderer, theme, window size, paths) and an **Open Log** shortcut (also in the Command Palette).
 - **In-app update check**: Opening **Settings → About** checks GitHub Releases (`APP_GITHUB_REPO` in `CMakeLists.txt`, or empty to disable) and shows an **Update** button when a newer version is available. On macOS and Linux it downloads, installs in place, and relaunches (falling back to opening the release page on Windows or non-writable locations).
 - **CLI flags**: `--help` (`-h`), `--version` (`-v`), `--settings <path>`, and `--software` (force software renderer).
 

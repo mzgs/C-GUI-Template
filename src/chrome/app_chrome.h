@@ -4,6 +4,7 @@
 #include <cui/cui_app.h>
 #include <cui/cui.h>
 #include <stdbool.h>
+#include "app_log.h"
 #include "settings.h"
 
 enum {

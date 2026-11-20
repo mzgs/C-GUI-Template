@@ -86,6 +86,54 @@ void chrome_open_settings_folder(app_chrome *chrome, cui_ctx *ui) {
     }
 }
 
+void chrome_open_log_file(app_chrome *chrome, cui_ctx *ui) {
+    const char *path = app_log_path();
+    if (!path || !path[0] || !cui_app_open_url(path)) {
+        app_chrome_notify(chrome, ui, "Couldn’t open log file.", CUI_TONE_DANGER);
+    }
+}
+
+void chrome_format_debug_info(const app_chrome *chrome, cui_ctx *ui, char *out, size_t cap) {
+    if (!out || cap == 0) return;
+    static const char *const mode_names[APP_THEME_COUNT] = { "System", "Light", "Dark" };
+    char os_info[128] = "unknown";
+    app_os_info(os_info, sizeof os_info);
+
+    const char *backend = cui_app_backend(NULL);
+    const char *renderer = cui_app_is_software(NULL) ? "Software" : "OpenGL";
+    const char *resolved_theme = (ui && cui_get_theme_mode(ui) == CUI_THEME_DARK) ? "Dark" : "Light";
+    app_theme_mode mode = chrome ? chrome->settings.appearance.theme_mode : APP_THEME_SYSTEM;
+    const char *mode_name = (mode >= 0 && mode < APP_THEME_COUNT) ? mode_names[mode] : "System";
+    int scale_pct = chrome ? (int)lroundf(chrome->settings.appearance.font_scale * 100.0f) : 100;
+    cui_vec2 win = cui_app_ui(NULL) ? cui_app_size(NULL) : (cui_vec2){ 0, 0 };
+    int win_w = (int)lroundf(win.x);
+    int win_h = (int)lroundf(win.y);
+    if (win_w <= 0 && chrome) win_w = chrome->settings.window.width;
+    if (win_h <= 0 && chrome) win_h = chrome->settings.window.height;
+
+    char settings_dir[1024] = "";
+    if (chrome) app_settings_dir(settings_dir, sizeof settings_dir, chrome->cli.settings_path, false);
+    const char *log_path = app_log_path();
+
+    snprintf(out, cap,
+             "App: %s %s\n"
+             "Bundle ID: %s\n"
+             "OS: %s\n"
+             "Backend: %s (%s)\n"
+             "Theme: %s (%s) · Scale: %d%%\n"
+             "Window: %dx%d%s\n"
+             "Settings dir: %s\n"
+             "Log file: %s",
+             APP_NAME, APP_VERSION,
+             APP_BUNDLE_ID[0] ? APP_BUNDLE_ID : "none",
+             os_info,
+             backend ? backend : "unknown", renderer,
+             resolved_theme, mode_name, scale_pct,
+             win_w, win_h, (cui_app_ui(NULL) && cui_app_is_fullscreen(NULL)) ? " (fullscreen)" : "",
+             settings_dir[0] ? settings_dir : "unknown",
+             (log_path && log_path[0]) ? log_path : "disabled");
+}
+
 void chrome_toggle_fullscreen(void) {
     if (cui_app_ui(NULL)) cui_app_set_fullscreen(NULL, !cui_app_is_fullscreen(NULL));
 }
@@ -214,6 +262,8 @@ void app_chrome_shutdown(app_chrome *chrome) {
         app_updater_destroy(chrome->updater);
         chrome->updater = NULL;
     }
+    app_log_info("Shutting down %s", APP_NAME);
+    app_log_shutdown();
 }
 
 static app_updater *chrome_ensure_updater(app_chrome *chrome) {
@@ -309,7 +359,11 @@ static void sync_window_state(app_chrome *chrome, cui_ctx *ui) {
     if (chrome->window_state_ui != ui) {
         chrome->window_state_ui = ui;
         chrome->window_fullscreen_pending = false;
-        app_window_apply_metadata(cui_app_native_window(NULL), cui_app_backend(NULL));
+        const char *backend = cui_app_backend(NULL);
+        app_log_info("Window ready (backend=%s, renderer=%s)",
+                     backend ? backend : "unknown",
+                     cui_app_is_software(NULL) ? "Software" : "OpenGL");
+        app_window_apply_metadata(cui_app_native_window(NULL), backend);
         if (chrome->settings.window.has_pos) {
             app_window_set_pos(cui_app_native_window(NULL), cui_app_backend(NULL),
                                chrome->settings.window.x, chrome->settings.window.y);
@@ -501,6 +555,21 @@ bool app_chrome_init(app_chrome *chrome, int argc, char **argv, int *exit_code) 
 #ifdef __APPLE__
     chrome->pending_action = -1;
 #endif
+    char log_dir[4096];
+    if (app_settings_dir(log_dir, sizeof log_dir, chrome->cli.settings_path, true)) {
+        char log_path[4096];
+        size_t dlen = strlen(log_dir);
+#ifdef _WIN32
+        const char *sep = (dlen > 0 && (log_dir[dlen - 1] == '/' || log_dir[dlen - 1] == '\\')) ? "" : "\\";
+#else
+        const char *sep = (dlen > 0 && log_dir[dlen - 1] == '/') ? "" : "/";
+#endif
+        int n = snprintf(log_path, sizeof log_path, "%s%sapp.log", log_dir, sep);
+        if (n > 0 && (size_t)n < sizeof log_path) {
+            app_log_init(log_path, 0);
+        }
+    }
+    app_log_info("Starting %s %s", APP_NAME, APP_VERSION);
     app_settings_load(&chrome->settings, chrome->cli.settings_path);
     const char *env_theme = getenv("CUI_THEME");
     const char *env_accent = getenv("CUI_ACCENT");

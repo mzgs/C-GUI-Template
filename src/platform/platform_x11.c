@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -36,6 +37,17 @@ int app_system_dark(void) {
             return 1;
     }
     return -1;
+}
+
+bool app_os_info(char *out, size_t capacity) {
+    if (!out || capacity == 0) return false;
+    struct utsname u;
+    if (uname(&u) == 0) {
+        int n = snprintf(out, capacity, "%s %s (%s)", u.sysname, u.release, u.machine);
+        return n > 0 && (size_t)n < capacity;
+    }
+    int n = snprintf(out, capacity, "Linux");
+    return n > 0 && (size_t)n < capacity;
 }
 
 #ifdef APP_HAVE_X11

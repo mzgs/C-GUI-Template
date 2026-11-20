@@ -12,6 +12,9 @@ enum {
 /* Platform system theme: 1 dark, 0 light, -1 unknown. */
 int app_system_dark(void);
 
+/* Human-readable OS and architecture summary (e.g. "macOS 15.3.1 (arm64)"). */
+bool app_os_info(char *out, size_t capacity);
+
 /* Native window helpers (backend is cui_app_backend(NULL)). */
 bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y);
 bool app_window_set_pos(void *native_window, const char *backend, int x, int y);

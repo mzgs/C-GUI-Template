@@ -17,6 +17,7 @@ void chrome_draw_command_palette(app_chrome *chrome, cui_ctx *ui) {
         { "Find", CUI_ICON_SEARCH, "Actions", find_shortcut },
         { "Save", CUI_ICON_SAVE, "Actions", save_shortcut },
         { "Open Settings Folder", CUI_ICON_FOLDER_OPEN, "Actions", NULL },
+        { "Open Log File", CUI_ICON_FILE_TEXT, "Actions", NULL },
         { "Check for Updates", CUI_ICON_REFRESH_CW, "Actions", NULL },
     };
     int count = (int)(sizeof commands / sizeof commands[0]);
@@ -65,6 +66,9 @@ void chrome_draw_command_palette(app_chrome *chrome, cui_ctx *ui) {
         chrome_open_settings_folder(chrome, ui);
         break;
     case 11:
+        chrome_open_log_file(chrome, ui);
+        break;
+    case 12:
         chrome->settings_section = SETTINGS_SECTION_ABOUT;
         chrome->settings_open = true;
         chrome_check_for_updates(chrome);

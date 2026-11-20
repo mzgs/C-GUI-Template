@@ -15,6 +15,8 @@ void chrome_apply_appearance(app_chrome *chrome, cui_ctx *ui);
 void chrome_reload_appearance(app_chrome *chrome, cui_ctx *ui);
 bool chrome_save_settings(app_chrome *chrome, cui_ctx *ui);
 void chrome_open_settings_folder(app_chrome *chrome, cui_ctx *ui);
+void chrome_open_log_file(app_chrome *chrome, cui_ctx *ui);
+void chrome_format_debug_info(const app_chrome *chrome, cui_ctx *ui, char *out, size_t cap);
 void chrome_reset_window(app_chrome *chrome, cui_ctx *ui);
 void chrome_toggle_fullscreen(void);
 void chrome_trigger_action(app_chrome *chrome, cui_ctx *ui, app_action action);
