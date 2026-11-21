@@ -77,17 +77,26 @@ static bool settings_path(path_char *path, const char *override) {
 }
 
 #ifdef _WIN32
+static bool is_directory(const wchar_t *path) {
+    DWORD attrs = GetFileAttributesW(path);
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+}
+
 static bool create_directories(wchar_t *path) {
     DWORD attrs = GetFileAttributesW(path);
     if (attrs != INVALID_FILE_ATTRIBUTES) return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
-    if (CreateDirectoryW(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS) return true;
-    if (GetLastError() != ERROR_PATH_NOT_FOUND) return false;
+    if (CreateDirectoryW(path, NULL)) return true;
+    DWORD err = GetLastError();
+    if (err == ERROR_ALREADY_EXISTS) return is_directory(path);
+    if (err != ERROR_PATH_NOT_FOUND) return false;
     wchar_t *slash = wcsrchr(path, L'\\');
-    if (!slash || slash == path) return false;
+    if (!slash || slash == path || (slash == path + 2 && path[1] == L':')) return false;
     *slash = L'\0';
     bool parent = create_directories(path);
     *slash = L'\\';
-    return parent && (CreateDirectoryW(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS);
+    if (!parent) return false;
+    if (CreateDirectoryW(path, NULL)) return true;
+    return GetLastError() == ERROR_ALREADY_EXISTS && is_directory(path);
 }
 #else
 static bool is_directory(const char *path) {
@@ -398,6 +407,7 @@ static void format_mods(int mods, char *buf, size_t cap) {
 }
 
 bool app_settings_load(app_settings *settings, const char *override) {
+    if (!settings) return false;
     path_char path[SETTINGS_PATH_CAP];
     if (!settings_path(path, override)) return false;
 #ifdef _WIN32
@@ -540,6 +550,7 @@ bool app_settings_load(app_settings *settings, const char *override) {
 }
 
 bool app_settings_save(const app_settings *settings, const char *override) {
+    if (!settings) return false;
     path_char path[SETTINGS_PATH_CAP];
     if (!settings_path(path, override)) return false;
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);

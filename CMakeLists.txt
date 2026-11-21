@@ -32,6 +32,14 @@ function(app_escape_rc out_var value)
     set(${out_var} "${value}" PARENT_SCOPE)
 endfunction()
 
+function(app_escape_desktop out_var value)
+    string(REPLACE "\\" "\\\\" value "${value}")
+    string(REPLACE "\n" "\\n" value "${value}")
+    string(REPLACE "\r" "\\r" value "${value}")
+    string(REPLACE "\t" "\\t" value "${value}")
+    set(${out_var} "${value}" PARENT_SCOPE)
+endfunction()
+
 find_package(Threads REQUIRED)
 
 include(FetchContent)
@@ -111,7 +119,6 @@ if(APPLE)
     app_escape_xml(APP_PLIST_NAME "${APP_NAME}")
     app_escape_xml(APP_PLIST_BUNDLE_ID "${APP_BUNDLE_ID}")
     app_escape_xml(APP_PLIST_COPYRIGHT "${APP_COPYRIGHT}")
-    configure_file(resources/Info.plist.in "${CMAKE_CURRENT_BINARY_DIR}/Info.plist.in" @ONLY)
 
     set(APP_MACOS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app.icns")
     set_source_files_properties("${APP_MACOS_ICON}" PROPERTIES
@@ -120,7 +127,7 @@ if(APPLE)
 
     set_target_properties(empty_gui PROPERTIES
         OUTPUT_NAME "${APP_NAME}"
-        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist.in"
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/resources/Info.plist.in"
         MACOSX_BUNDLE_BUNDLE_NAME "${APP_NAME}"
         MACOSX_BUNDLE_ICON_FILE "app.icns"
         MACOSX_BUNDLE_GUI_IDENTIFIER "${APP_BUNDLE_ID}"
@@ -165,8 +172,8 @@ else()
     if(NOT APP_LINUX_OUTPUT_NAME)
         set(APP_LINUX_OUTPUT_NAME "empty_gui")
     endif()
-    set(APP_DESKTOP_NAME "${APP_NAME}")
-    set(APP_DESKTOP_DESCRIPTION "${APP_DESCRIPTION}")
+    app_escape_desktop(APP_DESKTOP_NAME "${APP_NAME}")
+    app_escape_desktop(APP_DESKTOP_DESCRIPTION "${APP_DESCRIPTION}")
     set(APP_EXEC_NAME "${APP_LINUX_OUTPUT_NAME}")
     configure_file(resources/app.desktop.in "${CMAKE_CURRENT_BINARY_DIR}/${APP_BUNDLE_ID}.desktop" @ONLY)
     install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${APP_BUNDLE_ID}.desktop"

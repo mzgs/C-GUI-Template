@@ -88,6 +88,37 @@ static Display *x11_display(void) {
     return g_x11_dpy;
 }
 
+static bool x11_watch_drain(Display *dpy, Window win) {
+    while (XPending(dpy) > 0) {
+        XEvent ev;
+        XNextEvent(dpy, &ev);
+        if (ev.type == DestroyNotify && ev.xdestroywindow.window == win) {
+            return false;
+        }
+        if (ev.type == UnmapNotify && ev.xunmap.window == win) {
+            pthread_mutex_lock(&g_x11_watch_mu);
+            g_x11_last_normal = false;
+            pthread_mutex_unlock(&g_x11_watch_mu);
+        } else if (ev.type == ConfigureNotify && ev.xconfigure.window == win) {
+            pthread_mutex_lock(&g_x11_watch_mu);
+            bool size_changed = !g_x11_has_last_size ||
+                                ev.xconfigure.width != g_x11_last_w ||
+                                ev.xconfigure.height != g_x11_last_h;
+            g_x11_last_w = ev.xconfigure.width;
+            g_x11_last_h = ev.xconfigure.height;
+            g_x11_has_last_size = true;
+            if (!size_changed && g_x11_last_normal &&
+                (ev.xconfigure.send_event || (g_x11_frame_left == 0 && g_x11_frame_top == 0))) {
+                g_x11_pending_x = ev.xconfigure.x - g_x11_frame_left;
+                g_x11_pending_y = ev.xconfigure.y - g_x11_frame_top;
+                g_x11_has_pending_pos = true;
+            }
+            pthread_mutex_unlock(&g_x11_watch_mu);
+        }
+    }
+    return true;
+}
+
 static void *x11_watch_thread_main(void *arg) {
     (void)arg;
     Display *dpy = g_x11_watch_dpy;
@@ -96,33 +127,7 @@ static void *x11_watch_thread_main(void *arg) {
     int pfd_read = g_x11_watch_pipe[0];
 
     for (;;) {
-        while (XPending(dpy) > 0) {
-            XEvent ev;
-            XNextEvent(dpy, &ev);
-            if (ev.type == DestroyNotify && ev.xdestroywindow.window == win) {
-                return NULL;
-            }
-            if (ev.type == UnmapNotify && ev.xunmap.window == win) {
-                pthread_mutex_lock(&g_x11_watch_mu);
-                g_x11_last_normal = false;
-                pthread_mutex_unlock(&g_x11_watch_mu);
-            } else if (ev.type == ConfigureNotify && ev.xconfigure.window == win) {
-                pthread_mutex_lock(&g_x11_watch_mu);
-                bool size_changed = !g_x11_has_last_size ||
-                                    ev.xconfigure.width != g_x11_last_w ||
-                                    ev.xconfigure.height != g_x11_last_h;
-                g_x11_last_w = ev.xconfigure.width;
-                g_x11_last_h = ev.xconfigure.height;
-                g_x11_has_last_size = true;
-                if (!size_changed && g_x11_last_normal &&
-                    (ev.xconfigure.send_event || (g_x11_frame_left == 0 && g_x11_frame_top == 0))) {
-                    g_x11_pending_x = ev.xconfigure.x - g_x11_frame_left;
-                    g_x11_pending_y = ev.xconfigure.y - g_x11_frame_top;
-                    g_x11_has_pending_pos = true;
-                }
-                pthread_mutex_unlock(&g_x11_watch_mu);
-            }
-        }
+        if (!x11_watch_drain(dpy, win)) return NULL;
 
         struct pollfd fds[2];
         fds[0].fd = xfd;
@@ -136,7 +141,13 @@ static void *x11_watch_thread_main(void *arg) {
             if (errno == EINTR) continue;
             break;
         }
-        if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) break;
+        if (fds[0].revents & POLLIN) {
+            if (!x11_watch_drain(dpy, win)) return NULL;
+        }
+        if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) {
+            (void)x11_watch_drain(dpy, win);
+            break;
+        }
         if (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) break;
     }
     return NULL;

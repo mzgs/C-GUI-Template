@@ -193,9 +193,12 @@ fi
 github_repo_slug() {
     git remote get-url "$REMOTE" 2>/dev/null | sed -E \
         -e 's#^https?://([^@]+@)?github\.com/##' \
-        -e 's#^ssh://git@github\.com/##' \
+        -e 's#^ssh://git@github\.com(:[0-9]+)?/##' \
+        -e 's#^git://github\.com/##' \
         -e 's#^git@github\.com:##' \
-        -e 's#\.git$##' || true
+        -e 's#/*$##' \
+        -e 's#\.git$##' \
+        -e 's#/*$##' || true
 }
 
 read_cmake_project_name() {
@@ -282,17 +285,33 @@ read_install_repo() {
 }
 
 slugify_kebab() {
-    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E \
+    printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed -E \
         -e 's/[^a-z0-9]+/-/g' \
         -e 's/^-+//' \
         -e 's/-+$//'
 }
 
 slugify_snake() {
-    printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E \
+    printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]' | LC_ALL=C sed -E \
         -e 's/[^a-z0-9]+/_/g' \
         -e 's/^_+//' \
         -e 's/_+$//'
+}
+
+is_reserved_target() {
+    t_lower="$(printf '%s' "$1" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    case "$t_lower" in
+        app_common|app_log|app_platform|app_settings|app_chrome|\
+        log_tests|updater_tests|actions_tests|cui|yyjson|\
+        run|all|all_build|zero_check|install|test|run_tests|clean|help|\
+        edit_cache|rebuild_cache|package|package_source|\
+        list_install_components|install_local|install_strip|\
+        private|public|interface|targets|properties|command|depends|\
+        output_name|macosx_bundle|app_win32_output_name|app_linux_output_name)
+            return 0
+            ;;
+    esac
+    return 1
 }
 
 title_case_slug() {
@@ -327,6 +346,16 @@ validate_inputs() {
         exit 2
     fi
     validate_no_newlines "app name" "$NEW_NAME"
+    case "$NEW_NAME" in
+        "."|".."|*"/"*|*"\\"*|*":"*|*"*"*|*"?"*|*'"'*|*"<"*|*">"*|*"|"*)
+            echo "Invalid app name '$NEW_NAME': cannot be '.'/'..' or contain path/filename characters (/ \\ : * ? \" < > |)." >&2
+            exit 2
+            ;;
+        " "*|*" "|*".")
+            echo "Invalid app name '$NEW_NAME': cannot start/end with a space or end with '.'." >&2
+            exit 2
+            ;;
+    esac
     validate_no_newlines "description" "$NEW_DESCRIPTION"
     validate_no_newlines "author" "$NEW_AUTHOR"
     validate_no_newlines "copyright" "$NEW_COPYRIGHT"
@@ -335,12 +364,10 @@ validate_inputs() {
         echo "Invalid target name '$NEW_TARGET'. Use letters, digits, '-' or '_' starting with a letter." >&2
         exit 2
     fi
-    case "$NEW_TARGET" in
-        app_common|app_log|app_platform|app_settings|app_chrome|log_tests|updater_tests|actions_tests|cui|yyjson|run|all|install|test)
-            echo "Target name '$NEW_TARGET' conflicts with a reserved CMake target." >&2
-            exit 2
-            ;;
-    esac
+    if is_reserved_target "$NEW_TARGET"; then
+        echo "Target name '$NEW_TARGET' conflicts with a reserved CMake target." >&2
+        exit 2
+    fi
 
     if ! printf '%s\n' "$NEW_PROJECT" | grep -Eq '^[A-Za-z][A-Za-z0-9_-]*$'; then
         echo "Invalid CMake project name '$NEW_PROJECT'. Use letters, digits, '-' or '_' starting with a letter." >&2
@@ -443,7 +470,10 @@ prompt_value() {
     else
         printf '%s (optional): ' "$label" >&2
     fi
-    IFS= read -r reply || reply=""
+    if ! IFS= read -r reply && [ -z "$reply" ]; then
+        printf '\nAborted.\n' >&2
+        return 1
+    fi
     if [ "$allow_clear" -eq 1 ] && [ "$reply" = "-" ]; then
         printf ''
     elif [ -n "$reply" ]; then
@@ -499,6 +529,9 @@ DERIVED_TARGET="$(slugify_kebab "$NEW_NAME")"
 case "$DERIVED_TARGET" in
     ""|[0-9]*) DERIVED_TARGET="app-${DERIVED_TARGET:-gui}" ;;
 esac
+if is_reserved_target "$DERIVED_TARGET"; then
+    DERIVED_TARGET="${DERIVED_TARGET}-app"
+fi
 if [ "$IS_TEMPLATE_DEFAULTS" -eq 0 ] && [ "$NEW_NAME" = "$CUR_NAME" ]; then
     DEFAULT_TARGET="$CUR_TARGET"
 else
@@ -547,7 +580,7 @@ if [ -z "$APP_SLUG" ]; then
     APP_SLUG="app"
 fi
 DERIVED_BUNDLE_ID="com.${OWNER_SLUG}.${APP_SLUG}"
-if [ "$IS_TEMPLATE_DEFAULTS" -eq 0 ] && [ "$NEW_NAME" = "$CUR_NAME" ] && [ "$NEW_TARGET" = "$CUR_TARGET" ] && [ "$NEW_REPO" = "$CUR_REPO" ]; then
+if [ "$IS_TEMPLATE_DEFAULTS" -eq 0 ] && [ "$NEW_TARGET" = "$CUR_TARGET" ] && [ "$NEW_REPO" = "$CUR_REPO" ] && { [ -n "$NEW_REPO" ] || [ "$NEW_AUTHOR" = "$CUR_AUTHOR" ]; }; then
     DEFAULT_BUNDLE_ID="$CUR_BUNDLE_ID"
 else
     DEFAULT_BUNDLE_ID="$DERIVED_BUNDLE_ID"
@@ -588,7 +621,7 @@ EOF
 if [ "$DRY_RUN" -eq 1 ]; then
     echo ""
     echo "[dry-run] Would update CMakeLists.txt"
-    if [ -n "$NEW_REPO" ] && [ -f install.sh ]; then
+    if [ -f install.sh ] && [ -n "$NEW_REPO" ] && [ -n "$CUR_INSTALL_REPO" ]; then
         echo "[dry-run] Would update install.sh (REPO -> $NEW_REPO)"
     fi
     if [ -f README.md ]; then
@@ -605,7 +638,10 @@ fi
 
 if [ "$ASSUME_YES" -eq 0 ]; then
     printf '\nApply these changes? [Y/n]: ' >&2
-    IFS= read -r confirm || confirm=""
+    if ! IFS= read -r confirm && [ -z "$confirm" ]; then
+        printf '\nAborted.\n' >&2
+        exit 1
+    fi
     case "$confirm" in
         ""|[Yy]|[Yy][Ee][Ss]) ;;
         *)
@@ -634,15 +670,21 @@ awk '
         out = ""
         for (i = 1; i <= length(s); i++) {
             ch = substr(s, i, 1)
-            if (ch == "\\" || ch == "\"") out = out "\\" ch
+            if (ch == "\\" || ch == "\"" || ch == "$") out = out "\\" ch
             else out = out ch
         }
         return out
     }
-    function replace_cache_var(line, var, val,    prefix, rest, i, ch, esc, after) {
+    function replace_cache_var(line, var, val,    lead, rest, prefix, i, ch, esc, after) {
+        lead = ""
+        rest = line
+        if (match(rest, /^[[:space:]]+/)) {
+            lead = substr(rest, 1, RLENGTH)
+            rest = substr(rest, RLENGTH + 1)
+        }
         prefix = "set(" var " \""
-        if (index(line, prefix) != 1) return line
-        rest = substr(line, length(prefix) + 1)
+        if (index(rest, prefix) != 1) return line
+        rest = substr(rest, length(prefix) + 1)
         esc = 0
         after = ""
         for (i = 1; i <= length(rest); i++) {
@@ -656,7 +698,7 @@ awk '
                 break
             }
         }
-        return prefix cmake_escape(val) "\"" after
+        return lead prefix cmake_escape(val) "\"" after
     }
     function replace_token(s, old_t, new_t,    out, pos, before, after, ol, rest) {
         if (old_t == "" || old_t == new_t) return s
@@ -664,7 +706,9 @@ awk '
         out = ""
         rest = s
         while ((pos = index(rest, old_t)) > 0) {
-            before = (pos > 1) ? substr(rest, pos - 1, 1) : ""
+            if (pos > 1) before = substr(rest, pos - 1, 1)
+            else if (length(out) > 0) before = substr(out, length(out), 1)
+            else before = ""
             after = (pos + ol <= length(rest)) ? substr(rest, pos + ol, 1) : ""
             if (before !~ /[A-Za-z0-9_.\/-]/ && after !~ /[A-Za-z0-9_.\/-]/) {
                 out = out substr(rest, 1, pos - 1) new_t
@@ -681,13 +725,19 @@ awk '
     }
     {
         line = $0
-        if (!proj_done && line ~ /^[[:space:]]*project\(/) {
-            line = "project(" ENVIRON["NEW_PROJECT"] " VERSION " ENVIRON["NEW_VERSION"] " LANGUAGES C)"
-            proj_done = 1
-            print line
+        if (in_proj_skip) {
+            if (line ~ /\)/) in_proj_skip = 0
             next
         }
-        if (line ~ /^set\((APP_NAME|APP_DESCRIPTION|APP_AUTHOR|APP_COPYRIGHT|APP_BUNDLE_ID|APP_GITHUB_REPO)[[:space:]]+"/) {
+        if (!proj_done && line ~ /^[[:space:]]*project\(/) {
+            lead = ""
+            if (match(line, /^[[:space:]]+/)) lead = substr(line, 1, RLENGTH)
+            print lead "project(" ENVIRON["NEW_PROJECT"] " VERSION " ENVIRON["NEW_VERSION"] " LANGUAGES C)"
+            proj_done = 1
+            if (line !~ /\)/) in_proj_skip = 1
+            next
+        }
+        if (line ~ /^[[:space:]]*set\((APP_NAME|APP_DESCRIPTION|APP_AUTHOR|APP_COPYRIGHT|APP_BUNDLE_ID|APP_GITHUB_REPO)[[:space:]]+"/) {
             line = replace_cache_var(line, "APP_NAME", ENVIRON["NEW_NAME"])
             line = replace_cache_var(line, "APP_DESCRIPTION", ENVIRON["NEW_DESCRIPTION"])
             line = replace_cache_var(line, "APP_AUTHOR", ENVIRON["NEW_AUTHOR"])

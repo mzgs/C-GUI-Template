@@ -11,9 +11,12 @@ RAW_VERSION=""
 github_repo_slug() {
     git remote get-url "$REMOTE" 2>/dev/null | sed -E \
         -e 's#^https?://([^@]+@)?github\.com/##' \
-        -e 's#^ssh://git@github\.com/##' \
+        -e 's#^ssh://git@github\.com(:[0-9]+)?/##' \
+        -e 's#^git://github\.com/##' \
         -e 's#^git@github\.com:##' \
-        -e 's#\.git$##'
+        -e 's#/*$##' \
+        -e 's#\.git$##' \
+        -e 's#/*$##'
 }
 
 sync_macos_signing_secrets() {

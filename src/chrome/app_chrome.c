@@ -492,6 +492,9 @@ static void save_if_dirty(app_chrome *chrome) {
 }
 
 void app_chrome_shutdown(app_chrome *chrome) {
+    if (!chrome) return;
+    /* Stop platform watchers (e.g. X11 ConfigureNotify thread) before consuming final position. */
+    app_platform_shutdown();
     int pending_x = 0, pending_y = 0;
     if (!chrome->settings.window.fullscreen &&
         !chrome->window_fullscreen_pending &&
@@ -518,7 +521,6 @@ void app_chrome_shutdown(app_chrome *chrome) {
 #ifdef __APPLE__
     app_menu_shutdown();
 #endif
-    app_platform_shutdown();
     app_log_info("Shutting down %s", APP_NAME);
     app_log_uninstall_crash_handler();
     app_log_shutdown();

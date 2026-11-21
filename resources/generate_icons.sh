@@ -176,3 +176,7 @@ with open(out_path, "wb") as f:
 PY
 
 echo "Generated app.icns and app.ico from $SRC"
+SRC_REAL="$(cd -- "$(dirname -- "$SRC")" && pwd)/$(basename -- "$SRC")"
+if [ "$SRC_REAL" != "$SCRIPT_DIR/app.png" ]; then
+    echo "Note: resources/app.png (used on Linux) was not updated; copy your icon there too if replacing the app icon."
+fi

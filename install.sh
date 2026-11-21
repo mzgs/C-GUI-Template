@@ -201,13 +201,21 @@ else
                 INSTALLED_BIN="$INSTALLED_BIN" awk '
                     /^Exec=/ {
                         raw = ENVIRON["INSTALLED_BIN"]
-                        need_quote = (raw ~ /[[:space:]"\\]/)
+                        need_quote = (raw ~ /[[:space:]"\047\\><~|&;$*?()#`]/)
                         out = ""
                         for (i = 1; i <= length(raw); i++) {
                             ch = substr(raw, i, 1)
-                            if (need_quote && (ch == "\\" || ch == "\"")) out = out "\\" ch
-                            else if (ch == "%") out = out "%%"
-                            else out = out ch
+                            if (ch == "%") {
+                                out = out "%%"
+                            } else if (need_quote && ch == "\\") {
+                                out = out "\\\\\\\\"
+                            } else if (need_quote && (ch == "\"" || ch == "$" || ch == "`")) {
+                                out = out "\\\\" ch
+                            } else if (ch == "\\") {
+                                out = out "\\\\"
+                            } else {
+                                out = out ch
+                            }
                         }
                         if (need_quote) out = "\"" out "\""
                         print "Exec=" out
