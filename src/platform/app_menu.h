@@ -36,5 +36,7 @@ typedef struct {
 void app_menu_install(const app_menu_hooks *hooks);
 /* Sync dynamic menu items, shortcut labels, and fullscreen title on the native menu bar. */
 void app_menu_sync(const app_menu_state *state);
+/* Detach hooks and local event monitors before app_chrome is destroyed. */
+void app_menu_shutdown(void);
 
 #endif

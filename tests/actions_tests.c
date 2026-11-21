@@ -1,3 +1,7 @@
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "chrome_internal.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -276,6 +280,17 @@ static void test_deferred_keybindings_persistence_and_reset(void) {
     CHECK(app_keybinding_conflict(&chrome.settings, find_kb) == APP_CONFLICT_SETTINGS);
 #endif
 
+    /* Hidden-from-keybindings actions with fixed combos flag conflicts via chrome_keybinding_conflict */
+    CHECK(app_chrome_register_action(&chrome, &(app_action_desc){
+        .id = "fixed_hidden",
+        .title = "Fixed Hidden",
+        .default_combo = { CUI_MOD_PRIMARY | CUI_MOD_SHIFT, CUI_KEY_P },
+        .hide_from_keybindings = true,
+    }));
+    chrome.settings.keybindings[find_kb].combo = (cui_key_combo){ CUI_MOD_PRIMARY | CUI_MOD_SHIFT, CUI_KEY_P };
+    CHECK(app_keybinding_conflict(&chrome.settings, find_kb) == APP_CONFLICT_NONE);
+    CHECK(chrome_keybinding_conflict(&chrome, find_kb) == APP_CONFLICT_SETTINGS);
+
     /* Restore find to cleared and save to disk */
     chrome.settings.keybindings[find_kb].combo = (cui_key_combo){ 0, CUI_KEY_NONE };
     CHECK(app_settings_save(&chrome.settings, path));
@@ -532,11 +547,47 @@ static void test_shortcuts_and_text_focus(void) {
     cleanup_test_dir(dir, path);
 }
 
+static void test_settings_dir_rejects_file_and_env_path(void) {
+    char dir[1024], path[1088];
+    temp_settings_path("dircheck", dir, sizeof dir, path, sizeof path);
+
+    char blocker[1088];
+    char nested[1152];
+#ifdef _WIN32
+    snprintf(blocker, sizeof blocker, "%s\\not_a_dir", dir);
+    snprintf(nested, sizeof nested, "%s\\settings.json", blocker);
+#else
+    snprintf(blocker, sizeof blocker, "%s/not_a_dir", dir);
+    snprintf(nested, sizeof nested, "%s/settings.json", blocker);
+#endif
+    CHECK(write_text_file(blocker, "file"));
+    char out_dir[1088];
+    CHECK(!app_settings_dir(out_dir, sizeof out_dir, nested, true));
+    remove(blocker);
+
+#ifndef _WIN32
+    /* APP_SETTINGS_PATH is used when --settings is not provided on the CLI. */
+    CHECK(setenv("APP_SETTINGS_PATH", path, 1) == 0);
+    app_chrome chrome;
+    char arg0[] = "actions_tests";
+    char *argv[] = { arg0 };
+    int exit_code = 0;
+    CHECK(app_chrome_init(&chrome, 1, argv, &exit_code));
+    CHECK(chrome.cli.settings_path != NULL);
+    CHECK(strcmp(chrome.cli.settings_path, path) == 0);
+    app_chrome_shutdown(&chrome);
+    unsetenv("APP_SETTINGS_PATH");
+#endif
+
+    cleanup_test_dir(dir, path);
+}
+
 int main(void) {
     test_registration_and_trigger();
     test_deferred_keybindings_persistence_and_reset();
     test_palette_provider_and_group_coalescing();
     test_shortcuts_and_text_focus();
+    test_settings_dir_rejects_file_and_env_path();
     if (failures > 0) {
         fprintf(stderr, "%d test(s) failed.\n", failures);
         return 1;

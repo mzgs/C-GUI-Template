@@ -514,10 +514,15 @@ else
 fi
 
 # Derive CMake project() name from NEW_TARGET
-DEFAULT_PROJECT="$(slugify_snake "$NEW_TARGET")"
-case "$DEFAULT_PROJECT" in
-    ""|[0-9]*) DEFAULT_PROJECT="app_${DEFAULT_PROJECT:-gui}" ;;
+DERIVED_PROJECT="$(slugify_snake "$NEW_TARGET")"
+case "$DERIVED_PROJECT" in
+    ""|[0-9]*) DERIVED_PROJECT="app_${DERIVED_PROJECT:-gui}" ;;
 esac
+if [ "$IS_TEMPLATE_DEFAULTS" -eq 0 ] && [ "$NEW_TARGET" = "$CUR_TARGET" ]; then
+    DEFAULT_PROJECT="$CUR_PROJECT"
+else
+    DEFAULT_PROJECT="$DERIVED_PROJECT"
+fi
 if [ "$OPT_PROJECT_SET" -eq 1 ]; then
     NEW_PROJECT="$OPT_PROJECT"
 elif [ "$ASSUME_YES" -eq 1 ]; then

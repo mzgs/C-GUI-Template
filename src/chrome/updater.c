@@ -3,6 +3,7 @@
 #endif
 
 #include "updater.h"
+#include "app_config.h"
 #include "app_log.h"
 #include "platform.h"
 #include <ctype.h>
@@ -98,8 +99,31 @@ bool app_updater_extract_release_tag(const char *url, char *tag, size_t cap) {
 
 typedef struct {
     unsigned long parts[4];
-    bool prerelease;
+    const char *prerelease;
+    size_t prerelease_len;
 } parsed_version;
+
+static bool is_ident_char(char c) {
+    return isalnum((unsigned char)c) || c == '-';
+}
+
+static bool validate_dot_identifiers(const char *start, const char *end) {
+    if (start >= end) return false;
+    const char *p = start;
+    while (p < end) {
+        const char *seg = p;
+        while (p < end && *p != '.') {
+            if (!is_ident_char(*p)) return false;
+            ++p;
+        }
+        if (p == seg) return false;
+        if (p < end) {
+            ++p;
+            if (p == end) return false;
+        }
+    }
+    return true;
+}
 
 static bool parse_version(const char *str, parsed_version *out) {
     if (!str || !out) return false;
@@ -128,14 +152,64 @@ static bool parse_version(const char *str, parsed_version *out) {
     }
     if (count < 2) return false;
     if (*p == '-') {
-        if (!p[1]) return false;
-        out->prerelease = true;
+        const char *pre_start = p + 1;
+        const char *plus = strchr(pre_start, '+');
+        const char *pre_end = plus ? plus : pre_start + strlen(pre_start);
+        if (!validate_dot_identifiers(pre_start, pre_end)) return false;
+        if (plus && !validate_dot_identifiers(plus + 1, plus + 1 + strlen(plus + 1))) return false;
+        out->prerelease = pre_start;
+        out->prerelease_len = (size_t)(pre_end - pre_start);
         return true;
     }
     if (*p == '+') {
-        return p[1] != '\0';
+        const char *meta_start = p + 1;
+        return validate_dot_identifiers(meta_start, meta_start + strlen(meta_start));
     }
     return *p == '\0';
+}
+
+static bool is_all_digits(const char *s, size_t len) {
+    if (len == 0) return false;
+    for (size_t i = 0; i < len; ++i) {
+        if (!isdigit((unsigned char)s[i])) return false;
+    }
+    return true;
+}
+
+static int compare_prerelease_ident(const char *a, size_t alen, const char *b, size_t blen) {
+    bool a_num = is_all_digits(a, alen);
+    bool b_num = is_all_digits(b, blen);
+    if (a_num && b_num) {
+        while (alen > 1 && *a == '0') { ++a; --alen; }
+        while (blen > 1 && *b == '0') { ++b; --blen; }
+        if (alen != blen) return alen > blen ? 1 : -1;
+        int cmp = memcmp(a, b, alen);
+        return cmp == 0 ? 0 : (cmp > 0 ? 1 : -1);
+    }
+    if (a_num != b_num) return a_num ? -1 : 1;
+    size_t min_len = alen < blen ? alen : blen;
+    int cmp = memcmp(a, b, min_len);
+    if (cmp != 0) return cmp > 0 ? 1 : -1;
+    if (alen != blen) return alen > blen ? 1 : -1;
+    return 0;
+}
+
+static int compare_prerelease(const char *a, size_t alen, const char *b, size_t blen) {
+    const char *pa = a, *aend = a + alen;
+    const char *pb = b, *bend = b + blen;
+    while (pa < aend && pb < bend) {
+        const char *na = pa;
+        while (na < aend && *na != '.') ++na;
+        const char *nb = pb;
+        while (nb < bend && *nb != '.') ++nb;
+        int cmp = compare_prerelease_ident(pa, (size_t)(na - pa), pb, (size_t)(nb - pb));
+        if (cmp != 0) return cmp;
+        pa = (na < aend) ? na + 1 : aend;
+        pb = (nb < bend) ? nb + 1 : bend;
+    }
+    if (pa < aend) return 1;
+    if (pb < bend) return -1;
+    return 0;
 }
 
 int app_updater_compare_versions(const char *candidate, const char *current) {
@@ -145,7 +219,11 @@ int app_updater_compare_versions(const char *candidate, const char *current) {
         if (a.parts[i] > b.parts[i]) return 1;
         if (a.parts[i] < b.parts[i]) return -1;
     }
-    if (a.prerelease != b.prerelease) return a.prerelease ? -1 : 1;
+    bool a_pre = a.prerelease_len > 0;
+    bool b_pre = b.prerelease_len > 0;
+    if (a_pre != b_pre) return a_pre ? -1 : 1;
+    if (a_pre) return compare_prerelease(a.prerelease, a.prerelease_len,
+                                         b.prerelease, b.prerelease_len);
     return 0;
 }
 

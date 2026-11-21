@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+#include "app_config.h"
 #include "platform.h"
 #include <cui/cui_app.h>
 #include <ctype.h>
@@ -10,6 +11,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -32,7 +34,7 @@
 
 int app_system_dark(void) {
     const char *gtk = getenv("GTK_THEME");
-    if (!gtk) return -1;
+    if (!gtk || !gtk[0]) return -1;
     for (const char *p = gtk; *p; ++p) {
         if (tolower((unsigned char)p[0]) == 'd' &&
             tolower((unsigned char)p[1]) == 'a' &&
@@ -40,7 +42,7 @@ int app_system_dark(void) {
             tolower((unsigned char)p[3]) == 'k')
             return 1;
     }
-    return -1;
+    return 0;
 }
 
 bool app_os_info(char *out, size_t capacity) {
@@ -58,6 +60,22 @@ bool app_os_info(char *out, size_t capacity) {
 static Display *g_x11_dpy = NULL;
 static bool g_x11_tried = false;
 
+static pthread_mutex_t g_x11_watch_mu = PTHREAD_MUTEX_INITIALIZER;
+static Display *g_x11_watch_dpy = NULL;
+static Window g_x11_watch_win = 0;
+static int g_x11_watch_pipe[2] = { -1, -1 };
+static pthread_t g_x11_watch_thread;
+static bool g_x11_watch_running = false;
+static bool g_x11_has_pending_pos = false;
+static int g_x11_pending_x = 0;
+static int g_x11_pending_y = 0;
+static int g_x11_frame_left = 0;
+static int g_x11_frame_top = 0;
+static bool g_x11_last_normal = false;
+static bool g_x11_has_last_size = false;
+static int g_x11_last_w = 0;
+static int g_x11_last_h = 0;
+
 static Display *x11_display(void) {
     if (!g_x11_tried) {
         g_x11_tried = true;
@@ -68,6 +86,86 @@ static Display *x11_display(void) {
         }
     }
     return g_x11_dpy;
+}
+
+static void *x11_watch_thread_main(void *arg) {
+    (void)arg;
+    Display *dpy = g_x11_watch_dpy;
+    Window win = g_x11_watch_win;
+    int xfd = ConnectionNumber(dpy);
+    int pfd_read = g_x11_watch_pipe[0];
+
+    for (;;) {
+        while (XPending(dpy) > 0) {
+            XEvent ev;
+            XNextEvent(dpy, &ev);
+            if (ev.type == DestroyNotify && ev.xdestroywindow.window == win) {
+                return NULL;
+            }
+            if (ev.type == UnmapNotify && ev.xunmap.window == win) {
+                pthread_mutex_lock(&g_x11_watch_mu);
+                g_x11_last_normal = false;
+                pthread_mutex_unlock(&g_x11_watch_mu);
+            } else if (ev.type == ConfigureNotify && ev.xconfigure.window == win) {
+                pthread_mutex_lock(&g_x11_watch_mu);
+                bool size_changed = !g_x11_has_last_size ||
+                                    ev.xconfigure.width != g_x11_last_w ||
+                                    ev.xconfigure.height != g_x11_last_h;
+                g_x11_last_w = ev.xconfigure.width;
+                g_x11_last_h = ev.xconfigure.height;
+                g_x11_has_last_size = true;
+                if (!size_changed && g_x11_last_normal &&
+                    (ev.xconfigure.send_event || (g_x11_frame_left == 0 && g_x11_frame_top == 0))) {
+                    g_x11_pending_x = ev.xconfigure.x - g_x11_frame_left;
+                    g_x11_pending_y = ev.xconfigure.y - g_x11_frame_top;
+                    g_x11_has_pending_pos = true;
+                }
+                pthread_mutex_unlock(&g_x11_watch_mu);
+            }
+        }
+
+        struct pollfd fds[2];
+        fds[0].fd = xfd;
+        fds[0].events = POLLIN;
+        fds[0].revents = 0;
+        fds[1].fd = pfd_read;
+        fds[1].events = POLLIN;
+        fds[1].revents = 0;
+        int r = poll(fds, 2, -1);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (fds[1].revents & (POLLIN | POLLHUP | POLLERR)) break;
+        if (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) break;
+    }
+    return NULL;
+}
+
+static void x11_stop_watcher(void) {
+    if (g_x11_watch_running) {
+        char byte = 1;
+        ssize_t w;
+        do {
+            w = write(g_x11_watch_pipe[1], &byte, 1);
+        } while (w < 0 && errno == EINTR);
+        (void)w;
+        (void)pthread_join(g_x11_watch_thread, NULL);
+        g_x11_watch_running = false;
+    }
+    if (g_x11_watch_pipe[0] >= 0) {
+        close(g_x11_watch_pipe[0]);
+        g_x11_watch_pipe[0] = -1;
+    }
+    if (g_x11_watch_pipe[1] >= 0) {
+        close(g_x11_watch_pipe[1]);
+        g_x11_watch_pipe[1] = -1;
+    }
+    if (g_x11_watch_dpy) {
+        XCloseDisplay(g_x11_watch_dpy);
+        g_x11_watch_dpy = NULL;
+    }
+    g_x11_watch_win = 0;
 }
 
 static void x11_frame_extents(Display *dpy, Window win, int *left, int *top) {
@@ -128,8 +226,13 @@ bool app_window_is_normal(void *native_window, const char *backend) {
         if (!dpy) return true;
         Window win = (Window)(uintptr_t)native_window;
         XWindowAttributes attr;
-        if (!XGetWindowAttributes(dpy, win, &attr) || attr.map_state != IsViewable) return false;
-        return !x11_window_has_abnormal_state(dpy, win);
+        bool normal = XGetWindowAttributes(dpy, win, &attr) &&
+                      attr.map_state == IsViewable &&
+                      !x11_window_has_abnormal_state(dpy, win);
+        pthread_mutex_lock(&g_x11_watch_mu);
+        g_x11_last_normal = normal;
+        pthread_mutex_unlock(&g_x11_watch_mu);
+        return normal;
     }
 #endif
     return true;
@@ -145,18 +248,68 @@ bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y
         XWindowAttributes attr;
         Window child = 0;
         int rx = 0, ry = 0;
-        if (!XGetWindowAttributes(dpy, win, &attr) || !attr.root || attr.map_state != IsViewable)
+        if (!XGetWindowAttributes(dpy, win, &attr) || !attr.root || attr.map_state != IsViewable) {
+            pthread_mutex_lock(&g_x11_watch_mu);
+            g_x11_last_normal = false;
+            pthread_mutex_unlock(&g_x11_watch_mu);
             return false;
-        if (x11_window_has_abnormal_state(dpy, win)) return false;
+        }
+        if (x11_window_has_abnormal_state(dpy, win)) {
+            pthread_mutex_lock(&g_x11_watch_mu);
+            g_x11_last_normal = false;
+            pthread_mutex_unlock(&g_x11_watch_mu);
+            return false;
+        }
         if (!XTranslateCoordinates(dpy, win, attr.root, 0, 0, &rx, &ry, &child)) return false;
         int left = 0, top = 0;
         x11_frame_extents(dpy, win, &left, &top);
+        pthread_mutex_lock(&g_x11_watch_mu);
+        g_x11_frame_left = left;
+        g_x11_frame_top = top;
+        g_x11_last_normal = true;
+        g_x11_has_pending_pos = false;
+        pthread_mutex_unlock(&g_x11_watch_mu);
         *x = rx - left;
         *y = ry - top;
         return true;
     }
 #endif
     return false;
+}
+
+bool app_window_get_bounds(void *native_window, const char *backend,
+                           bool *fullscreen, bool *normal,
+                           int *width, int *height,
+                           bool *has_pos, int *x, int *y) {
+    (void)native_window;
+    (void)backend;
+    (void)fullscreen;
+    (void)normal;
+    (void)width;
+    (void)height;
+    (void)has_pos;
+    (void)x;
+    (void)y;
+    return false;
+}
+
+bool app_window_consume_pending_pos(int *x, int *y) {
+#ifdef APP_HAVE_X11
+    bool found = false;
+    pthread_mutex_lock(&g_x11_watch_mu);
+    if (g_x11_has_pending_pos) {
+        if (x) *x = g_x11_pending_x;
+        if (y) *y = g_x11_pending_y;
+        g_x11_has_pending_pos = false;
+        found = true;
+    }
+    pthread_mutex_unlock(&g_x11_watch_mu);
+    return found;
+#else
+    (void)x;
+    (void)y;
+    return false;
+#endif
 }
 
 bool app_window_set_pos(void *native_window, const char *backend, int x, int y) {
@@ -236,9 +389,64 @@ void app_window_apply_metadata(void *native_window, const char *backend) {
 }
 
 void app_window_set_hooks(void *native_window, const char *backend, const app_window_hooks *hooks) {
+#ifdef APP_HAVE_X11
+    x11_stop_watcher();
+    pthread_mutex_lock(&g_x11_watch_mu);
+    g_x11_has_pending_pos = false;
+    g_x11_last_normal = false;
+    g_x11_has_last_size = false;
+    g_x11_frame_left = 0;
+    g_x11_frame_top = 0;
+    pthread_mutex_unlock(&g_x11_watch_mu);
+
+    if (!native_window || !backend || !hooks || strcmp(backend, "x11") != 0) return;
+
+    Display *wdpy = XOpenDisplay(NULL);
+    if (!wdpy) return;
+    int xfd = ConnectionNumber(wdpy);
+    if (xfd >= 0) (void)fcntl(xfd, F_SETFD, FD_CLOEXEC);
+
+    if (pipe(g_x11_watch_pipe) != 0) {
+        XCloseDisplay(wdpy);
+        return;
+    }
+    (void)fcntl(g_x11_watch_pipe[0], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(g_x11_watch_pipe[1], F_SETFD, FD_CLOEXEC);
+    (void)fcntl(g_x11_watch_pipe[0], F_SETFL, O_NONBLOCK);
+    (void)fcntl(g_x11_watch_pipe[1], F_SETFL, O_NONBLOCK);
+
+    Window win = (Window)(uintptr_t)native_window;
+    XWindowAttributes attr;
+    int left = 0, top = 0;
+    bool got_attr = XGetWindowAttributes(wdpy, win, &attr) != 0;
+    x11_frame_extents(wdpy, win, &left, &top);
+
+    pthread_mutex_lock(&g_x11_watch_mu);
+    g_x11_frame_left = left;
+    g_x11_frame_top = top;
+    if (got_attr) {
+        g_x11_last_w = attr.width;
+        g_x11_last_h = attr.height;
+        g_x11_has_last_size = true;
+        g_x11_last_normal = (attr.map_state == IsViewable) && !x11_window_has_abnormal_state(wdpy, win);
+    }
+    pthread_mutex_unlock(&g_x11_watch_mu);
+
+    XSelectInput(wdpy, win, StructureNotifyMask);
+    XFlush(wdpy);
+    g_x11_watch_dpy = wdpy;
+    g_x11_watch_win = win;
+
+    if (pthread_create(&g_x11_watch_thread, NULL, x11_watch_thread_main, NULL) == 0) {
+        g_x11_watch_running = true;
+    } else {
+        x11_stop_watcher();
+    }
+#else
     (void)native_window;
     (void)backend;
     (void)hooks;
+#endif
 }
 
 void app_window_set_dark(void *native_window, const char *backend, bool dark) {
@@ -249,6 +457,7 @@ void app_window_set_dark(void *native_window, const char *backend, bool dark) {
 
 void app_platform_shutdown(void) {
 #ifdef APP_HAVE_X11
+    x11_stop_watcher();
     if (g_x11_dpy) {
         XCloseDisplay(g_x11_dpy);
         g_x11_dpy = NULL;

@@ -44,15 +44,14 @@ static bool draw_general_section(app_chrome *chrome, cui_ctx *ui, bool compact) 
                     .kind = CUI_FILE_OPEN,
                     .title = "Import Settings",
                     .filter_name = "JSON",
-#ifdef __APPLE__
-                    /* CUI passes filter tokens to AppleScript `choose file of type`,
-                     * which treats 4-character strings like "json" as HFS type codes. */
-                    .filter = "public.json",
-#else
                     .filter = "json",
-#endif
                 }, path, sizeof path)) {
-                if (app_settings_load(&chrome->settings, path)) {
+                app_settings imported = chrome->settings;
+                if (app_settings_load(&imported, path)) {
+                    /* Keep live window geometry and local update timestamp intact. */
+                    imported.window = chrome->settings.window;
+                    imported.updates.last_checked = chrome->settings.updates.last_checked;
+                    chrome->settings = imported;
                     chrome_reload_appearance(chrome, ui);
                     changed = false;
                     if (chrome_save_settings(chrome, ui))
@@ -165,10 +164,15 @@ static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
                .placeholder = "Filter actions or keys...", .width = CUI_FILL);
 
     bool has_conflict = false;
+    int visible = 0;
     for (int i = 0; i < chrome->settings.keybinding_count; ++i) {
-        if (app_keybinding_conflict(&chrome->settings, i) != APP_CONFLICT_NONE) {
+        const app_keybinding *kb = &chrome->settings.keybindings[i];
+        if (!has_conflict && chrome_keybinding_conflict(chrome, i) != APP_CONFLICT_NONE) {
             has_conflict = true;
-            break;
+        }
+        if (app_contains_ignore_case(kb->label, chrome->keybinding_filter) ||
+            app_contains_ignore_case(cui_shortcut_label(ui, kb->combo), chrome->keybinding_filter)) {
+            ++visible;
         }
     }
     if (has_conflict) {
@@ -177,15 +181,18 @@ static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
                   .tone = CUI_TONE_WARNING);
     }
 
-    int visible = 0;
+    if (visible == 0) {
+        cui_secondary(ui, "No shortcuts match your filter.");
+        return false;
+    }
+
     cui_table(ui, "keybindings", columns, 2, .striped = true, .compact = true, .height = CUI_FILL) {
         for (int i = 0; i < chrome->settings.keybinding_count; ++i) {
             app_keybinding *kb = &chrome->settings.keybindings[i];
             if (!app_contains_ignore_case(kb->label, chrome->keybinding_filter) &&
                 !app_contains_ignore_case(cui_shortcut_label(ui, kb->combo), chrome->keybinding_filter))
                 continue;
-            ++visible;
-            int conflict = app_keybinding_conflict(&chrome->settings, i);
+            int conflict = chrome_keybinding_conflict(chrome, i);
             cui_table_row(ui, false);
             if (conflict == APP_CONFLICT_NONE) {
                 cui_table_cell_text(ui, kb->label);
@@ -203,7 +210,6 @@ static bool draw_keybindings_section(app_chrome *chrome, cui_ctx *ui) {
             theme->control_md = control_height;
         }
     }
-    if (!visible) cui_secondary(ui, "No shortcuts match your filter.");
     return changed;
 }
 

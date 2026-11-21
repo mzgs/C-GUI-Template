@@ -18,6 +18,11 @@ bool app_os_info(char *out, size_t capacity);
 /* Native window helpers (backend is cui_app_backend(NULL)). */
 bool app_window_is_normal(void *native_window, const char *backend);
 bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y);
+bool app_window_get_bounds(void *native_window, const char *backend,
+                           bool *fullscreen, bool *normal,
+                           int *width, int *height,
+                           bool *has_pos, int *x, int *y);
+bool app_window_consume_pending_pos(int *x, int *y);
 bool app_window_set_pos(void *native_window, const char *backend, int x, int y);
 void app_window_center(void *native_window, const char *backend, int width, int height);
 void app_window_apply_metadata(void *native_window, const char *backend);

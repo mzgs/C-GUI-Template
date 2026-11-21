@@ -3,6 +3,7 @@
 #endif
 
 #include "settings.h"
+#include "app_config.h"
 #include "app_log.h"
 #include "platform.h"
 #include <yyjson.h>
@@ -89,15 +90,23 @@ static bool create_directories(wchar_t *path) {
     return parent && (CreateDirectoryW(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS);
 }
 #else
+static bool is_directory(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
 static bool create_directories(char *path) {
-    if (mkdir(path, 0700) == 0 || errno == EEXIST) return true;
+    if (mkdir(path, 0700) == 0) return true;
+    if (errno == EEXIST) return is_directory(path);
     if (errno != ENOENT) return false;
     char *slash = strrchr(path, '/');
     if (!slash || slash == path) return false;
     *slash = '\0';
     bool parent = create_directories(path);
     *slash = '/';
-    return parent && (mkdir(path, 0700) == 0 || errno == EEXIST);
+    if (!parent) return false;
+    if (mkdir(path, 0700) == 0) return true;
+    return errno == EEXIST && is_directory(path);
 }
 #endif
 

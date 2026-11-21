@@ -22,6 +22,7 @@ void chrome_reset_window(app_chrome *chrome, cui_ctx *ui);
 void chrome_toggle_fullscreen(void);
 cui_key_combo chrome_action_combo(const app_chrome *chrome, const app_registered_action *action);
 cui_key_combo chrome_palette_combo(const app_chrome *chrome);
+int chrome_keybinding_conflict(const app_chrome *chrome, int index);
 bool chrome_trigger_action_index(app_chrome *chrome, cui_ctx *ui, int index);
 
 void chrome_check_for_updates(app_chrome *chrome, bool silent);

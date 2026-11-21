@@ -3,6 +3,7 @@
 #endif
 
 #include "app_log.h"
+#include "app_config.h"
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>

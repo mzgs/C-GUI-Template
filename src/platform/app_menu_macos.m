@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #include <cui/cui_app.h>
 #include <string.h>
+#include "app_config.h"
 #include "app_menu.h"
 
 static bool combo_equal(cui_key_combo a, cui_key_combo b) {
@@ -106,6 +107,8 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
 @property(nonatomic, assign) bool hasSyncedState;
 @property(nonatomic, assign) cui_key_combo lastPaletteCombo;
 @property(nonatomic, assign) bool lastFullscreen;
+@property(nonatomic, strong) id keyMonitor;
+@property(nonatomic, assign) bool observingTerminate;
 - (void)showAbout:(id)sender;
 - (void)showSettings:(id)sender;
 - (void)triggerAction:(NSMenuItem *)sender;
@@ -113,8 +116,8 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
 - (void)toggleFullscreen:(id)sender;
 - (void)triggerEditKey:(NSMenuItem *)sender;
 - (void)quitApp:(id)sender;
-- (void)windowDidMove:(NSNotification *)note;
 - (void)appWillTerminate:(NSNotification *)note;
+- (void)clearHooks;
 @end
 
 @implementation AppMenuTarget
@@ -212,10 +215,16 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
     return YES;
 }
 
-- (void)windowDidMove:(NSNotification *)note {
-    void *native = cui_app_native_window(NULL);
-    if (!native || note.object != (__bridge id)native) return;
-    [self requestRedraw];
+- (void)clearHooks {
+    self.settingsOpen = NULL;
+    self.settingsSection = NULL;
+    self.aboutSection = 0;
+    self.paletteOpen = NULL;
+    self.user = NULL;
+    self.onAction = NULL;
+    self.onEditKey = NULL;
+    self.onToggleFullscreen = NULL;
+    self.onWillTerminate = NULL;
 }
 
 - (void)appWillTerminate:(NSNotification *)note {
@@ -247,10 +256,36 @@ static void trim_menu_to_count(NSMenu *menu, NSInteger count) {
     }
 }
 
+static void ensure_menu_monitors(AppMenuTarget *target) {
+    if (!target.observingTerminate) {
+        [[NSNotificationCenter defaultCenter] addObserver:target
+                                                 selector:@selector(appWillTerminate:)
+                                                     name:NSApplicationWillTerminateNotification
+                                                   object:nil];
+        target.observingTerminate = true;
+    }
+    if (!target.keyMonitor) {
+        /* CUI consumes custom Command shortcuts before the native menu sees them. */
+        target.keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
+            if (!target.settingsOpen || *target.settingsOpen) return event;
+            NSEventModifierFlags modifiers = event.modifierFlags &
+                (NSEventModifierFlagCommand | NSEventModifierFlagControl |
+                 NSEventModifierFlagOption | NSEventModifierFlagShift);
+            if (modifiers == NSEventModifierFlagCommand &&
+                [event.charactersIgnoringModifiers isEqualToString:@","]) {
+                [target showSettings:nil];
+                return nil;
+            }
+            return event;
+        }];
+    }
+}
+
 void app_menu_install(const app_menu_hooks *hooks) {
     if (!hooks || !hooks->settings_open) return;
     if (shared_menu_target) {
         [shared_menu_target applyHooks:hooks];
+        ensure_menu_monitors(shared_menu_target);
         return;
     }
     NSMenu *bar = NSApp.mainMenu;
@@ -316,25 +351,23 @@ void app_menu_install(const app_menu_hooks *hooks) {
     [bar insertItem:make_submenu_item(@"Edit", editMenu) atIndex:insertAt + 1];
     [bar insertItem:make_submenu_item(@"View", viewMenu) atIndex:insertAt + 2];
 
-    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
-    [nc addObserver:target selector:@selector(windowDidMove:)
-               name:NSWindowDidMoveNotification object:nil];
-    [nc addObserver:target selector:@selector(appWillTerminate:)
-               name:NSApplicationWillTerminateNotification object:nil];
+    ensure_menu_monitors(target);
+}
 
-    /* CUI consumes custom Command shortcuts before the native menu sees them. */
-    [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
-        if (!target.settingsOpen || *target.settingsOpen) return event;
-        NSEventModifierFlags modifiers = event.modifierFlags &
-            (NSEventModifierFlagCommand | NSEventModifierFlagControl |
-             NSEventModifierFlagOption | NSEventModifierFlagShift);
-        if (modifiers == NSEventModifierFlagCommand &&
-            [event.charactersIgnoringModifiers isEqualToString:@","]) {
-            [target showSettings:nil];
-            return nil;
+void app_menu_shutdown(void) {
+    if (!shared_menu_target) return;
+    @autoreleasepool {
+        AppMenuTarget *target = shared_menu_target;
+        if (target.keyMonitor) {
+            [NSEvent removeMonitor:target.keyMonitor];
+            target.keyMonitor = nil;
         }
-        return event;
-    }];
+        if (target.observingTerminate) {
+            [[NSNotificationCenter defaultCenter] removeObserver:target];
+            target.observingTerminate = false;
+        }
+        [target clearHooks];
+    }
 }
 
 void app_menu_sync(const app_menu_state *state) {

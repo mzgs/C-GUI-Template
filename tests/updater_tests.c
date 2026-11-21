@@ -69,6 +69,13 @@ static void test_compare_versions(void) {
     CHECK(app_updater_compare_versions("v0.1.3", "0.1.4") == -1);
     CHECK(app_updater_compare_versions("0.1.5-rc.1", "0.1.5") == -1);
     CHECK(app_updater_compare_versions("0.1.5", "0.1.5-rc.1") == 1);
+    CHECK(app_updater_compare_versions("0.2.0-rc.2", "0.2.0-rc.1") == 1);
+    CHECK(app_updater_compare_versions("0.2.0-rc.1", "0.2.0-rc.2") == -1);
+    CHECK(app_updater_compare_versions("0.2.0-rc.10", "0.2.0-rc.2") == 1);
+    CHECK(app_updater_compare_versions("0.2.0-beta", "0.2.0-alpha.1") == 1);
+    CHECK(app_updater_compare_versions("0.2.0-alpha.1", "0.2.0-alpha") == 1);
+    CHECK(app_updater_compare_versions("0.2.0-alpha", "0.2.0-1") == 1);
+    CHECK(app_updater_compare_versions("0.2.0-rc.1+build.2", "0.2.0-rc.1+build.1") == 0);
 
     CHECK(app_updater_compare_versions("", "0.1.4") == -2);
     CHECK(app_updater_compare_versions("invalid", "0.1.4") == -2);
@@ -76,6 +83,10 @@ static void test_compare_versions(void) {
     CHECK(app_updater_compare_versions("1.2.3.4.5", "0.1.4") == -2);
     CHECK(app_updater_compare_versions("1.2.", "0.1.4") == -2);
     CHECK(app_updater_compare_versions("1.2.3-", "0.1.4") == -2);
+    CHECK(app_updater_compare_versions("1.2.3-rc..1", "0.1.4") == -2);
+    CHECK(app_updater_compare_versions("1.2.3-bad space", "0.1.4") == -2);
+    CHECK(app_updater_compare_versions("1.2.3+", "0.1.4") == -2);
+    CHECK(app_updater_compare_versions("1.2.3+a..b", "0.1.4") == -2);
 }
 
 static void test_check_due(void) {

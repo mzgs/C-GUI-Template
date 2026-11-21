@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#include "app_config.h"
 #include "platform.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -71,6 +72,34 @@ bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y
     }
 }
 
+bool app_window_get_bounds(void *native_window, const char *backend,
+                           bool *fullscreen, bool *normal,
+                           int *width, int *height,
+                           bool *has_pos, int *x, int *y) {
+    if (!native_window || !backend || strcmp(backend, "cocoa") != 0) return false;
+    @autoreleasepool {
+        NSWindow *win = (__bridge NSWindow *)native_window;
+        bool fs = (win.styleMask & NSWindowStyleMaskFullScreen) != 0;
+        bool norm = !win.isMiniaturized;
+        NSRect frame = win.frame;
+        NSRect content = [win contentRectForFrameRect:frame];
+        if (fullscreen) *fullscreen = fs;
+        if (normal) *normal = norm;
+        if (width) *width = (int)llround(content.size.width);
+        if (height) *height = (int)llround(content.size.height);
+        if (has_pos) *has_pos = norm;
+        if (x) *x = norm ? (int)llround(frame.origin.x) : 0;
+        if (y) *y = norm ? (int)llround(frame.origin.y) : 0;
+        return true;
+    }
+}
+
+bool app_window_consume_pending_pos(int *x, int *y) {
+    (void)x;
+    (void)y;
+    return false;
+}
+
 bool app_window_set_pos(void *native_window, const char *backend, int x, int y) {
     if (!native_window || !backend || strcmp(backend, "cocoa") != 0) return false;
     if (x < APP_WINDOW_POS_MIN || x > APP_WINDOW_POS_MAX ||
@@ -101,13 +130,118 @@ void app_window_apply_metadata(void *native_window, const char *backend) {
     (void)backend;
 }
 
+static char kMacOSAppearanceContext;
+
+@interface AppWindowObserver : NSObject
+@property(nonatomic, assign) app_window_hooks hooks;
+@property(nonatomic, assign) bool observingAppearance;
+- (void)detach;
+- (void)windowDidMove:(NSNotification *)note;
+- (void)windowWillClose:(NSNotification *)note;
+@end
+
+@implementation AppWindowObserver
+- (void)detach {
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    if (self.observingAppearance && NSApp) {
+        [NSApp removeObserver:self
+                   forKeyPath:@"effectiveAppearance"
+                      context:&kMacOSAppearanceContext];
+        self.observingAppearance = false;
+    }
+    memset(&_hooks, 0, sizeof _hooks);
+}
+
+- (void)windowDidMove:(NSNotification *)note {
+    (void)note;
+    if (_hooks.on_moved) {
+        _hooks.on_moved(_hooks.user);
+    }
+}
+
+- (void)windowWillClose:(NSNotification *)note {
+    (void)note;
+    void (*on_closing)(void *) = _hooks.on_closing;
+    void *user = _hooks.user;
+    _hooks.on_closing = NULL;
+    if (on_closing) {
+        on_closing(user);
+    }
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey, id> *)change
+                       context:(void *)context {
+    if (context != &kMacOSAppearanceContext) {
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
+    }
+    void (^notify)(void) = ^{
+        if (self->_hooks.on_theme_changed) {
+            self->_hooks.on_theme_changed(self->_hooks.user);
+        }
+        if (NSApp) {
+            NSEvent *ev = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                             location:NSZeroPoint
+                                        modifierFlags:0
+                                            timestamp:0
+                                         windowNumber:0
+                                              context:nil
+                                              subtype:0
+                                                data1:0
+                                                data2:0];
+            if (ev) [NSApp postEvent:ev atStart:NO];
+        }
+    };
+    if ([NSThread isMainThread]) notify();
+    else dispatch_async(dispatch_get_main_queue(), notify);
+}
+
+- (void)dealloc {
+    [self detach];
+}
+@end
+
+static AppWindowObserver *g_window_observer;
+
 void app_window_set_hooks(void *native_window, const char *backend, const app_window_hooks *hooks) {
-    (void)native_window;
-    (void)backend;
-    (void)hooks;
+    @autoreleasepool {
+        if (g_window_observer) {
+            [g_window_observer detach];
+            g_window_observer = nil;
+        }
+        if (!native_window || !backend || !hooks || strcmp(backend, "cocoa") != 0) return;
+
+        NSWindow *win = (__bridge NSWindow *)native_window;
+        AppWindowObserver *obs = [[AppWindowObserver alloc] init];
+        obs.hooks = *hooks;
+
+        NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+        [nc addObserver:obs selector:@selector(windowDidMove:)
+                   name:NSWindowDidMoveNotification object:win];
+        [nc addObserver:obs selector:@selector(windowWillClose:)
+                   name:NSWindowWillCloseNotification object:win];
+        if (@available(macOS 10.14, *)) {
+            if (NSApp && hooks->on_theme_changed) {
+                [NSApp addObserver:obs
+                        forKeyPath:@"effectiveAppearance"
+                           options:0
+                           context:&kMacOSAppearanceContext];
+                obs.observingAppearance = true;
+            }
+        }
+        g_window_observer = obs;
+    }
 }
 
 void app_platform_shutdown(void) {
+    @autoreleasepool {
+        if (g_window_observer) {
+            [g_window_observer detach];
+            g_window_observer = nil;
+        }
+    }
 }
 
 void app_window_set_dark(void *native_window, const char *backend, bool dark) {

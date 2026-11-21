@@ -4,6 +4,7 @@
 #include <cui/cui_app.h>
 #include <cui/cui.h>
 #include <stdbool.h>
+#include "app_config.h"
 #include "app_log.h"
 #include "settings.h"
 
@@ -84,6 +85,7 @@ typedef struct {
     /* Settings & CLI options */
     app_settings settings;
     app_cli_opts cli;
+    char env_settings_path[4096];
 
     /* Chrome UI state */
     bool settings_open;
@@ -125,6 +127,8 @@ typedef struct {
     int observed_window_x;
     int observed_window_y;
     cui_ctx *window_state_ui;
+    void *native_window;
+    const char *window_backend;
     cui_ctx *appearance_ui;
     bool appearance_force_motion;
     bool has_cached_system_dark;

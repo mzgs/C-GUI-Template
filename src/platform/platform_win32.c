@@ -3,6 +3,7 @@
 #define _WIN32_WINNT 0x0600
 #endif
 
+#include "app_config.h"
 #include "platform.h"
 #include <stdio.h>
 #include <string.h>
@@ -79,6 +80,28 @@ bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y
     *x = (int)r.left;
     *y = (int)r.top;
     return true;
+}
+
+bool app_window_get_bounds(void *native_window, const char *backend,
+                           bool *fullscreen, bool *normal,
+                           int *width, int *height,
+                           bool *has_pos, int *x, int *y) {
+    (void)native_window;
+    (void)backend;
+    (void)fullscreen;
+    (void)normal;
+    (void)width;
+    (void)height;
+    (void)has_pos;
+    (void)x;
+    (void)y;
+    return false;
+}
+
+bool app_window_consume_pending_pos(int *x, int *y) {
+    (void)x;
+    (void)y;
+    return false;
 }
 
 bool app_window_set_pos(void *native_window, const char *backend, int x, int y) {

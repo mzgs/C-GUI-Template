@@ -48,13 +48,10 @@ app_escape_c(APP_C_DESCRIPTION "${APP_DESCRIPTION}")
 app_escape_c(APP_C_BUNDLE_ID "${APP_BUNDLE_ID}")
 app_escape_c(APP_C_GITHUB_REPO "${APP_GITHUB_REPO}")
 
+configure_file(resources/app_config.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/app_config.h" @ONLY)
+
 add_library(app_common INTERFACE)
-target_compile_definitions(app_common INTERFACE
-    "APP_NAME=\"${APP_C_NAME}\""
-    "APP_DESCRIPTION=\"${APP_C_DESCRIPTION}\""
-    "APP_BUNDLE_ID=\"${APP_C_BUNDLE_ID}\""
-    "APP_VERSION=\"${PROJECT_VERSION}\""
-    "APP_GITHUB_REPO=\"${APP_C_GITHUB_REPO}\"")
+target_include_directories(app_common INTERFACE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 if(MSVC)
     target_compile_options(app_common INTERFACE /utf-8 /W4)
 else()
@@ -71,7 +68,7 @@ elseif(WIN32)
     target_link_libraries(app_platform PRIVATE advapi32 user32 winhttp)
 else()
     add_library(app_platform STATIC src/platform/platform_x11.c)
-    target_link_libraries(app_platform PRIVATE cui::cui)
+    target_link_libraries(app_platform PRIVATE cui::cui Threads::Threads)
 endif()
 target_include_directories(app_platform PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/platform")
 target_link_libraries(app_platform PRIVATE app_common)
@@ -195,7 +192,9 @@ if(BUILD_TESTING)
 
     add_test(NAME window_smoke COMMAND ${CMAKE_COMMAND} -E env
         "CUI_SCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/window-smoke.png"
-        CUI_SCREENSHOT_FRAMES=1 $<TARGET_FILE:empty_gui>)
+        CUI_SCREENSHOT_FRAMES=1
+        $<TARGET_FILE:empty_gui>
+        --settings "${CMAKE_CURRENT_BINARY_DIR}/smoke-test/window-settings.json")
     set_tests_properties(window_smoke PROPERTIES
         TIMEOUT 15 PASS_REGULAR_EXPRESSION "cui: saved")
 
@@ -203,6 +202,7 @@ if(BUILD_TESTING)
         add_test(NAME run_script_smoke COMMAND ${CMAKE_COMMAND} -E env
             "BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
             "BUILD_CONFIG=$<CONFIG>"
+            "APP_SETTINGS_PATH=${CMAKE_CURRENT_BINARY_DIR}/smoke-test/run-settings.json"
             "CUI_SCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/run-smoke.png"
             CUI_SCREENSHOT_FRAMES=1 ${CMAKE_CURRENT_SOURCE_DIR}/run.sh)
         set_tests_properties(run_script_smoke PROPERTIES
