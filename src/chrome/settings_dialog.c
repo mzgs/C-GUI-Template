@@ -114,6 +114,7 @@ static bool draw_appearance_section(app_chrome *chrome, cui_ctx *ui, bool compac
     if (theme_changed) {
         chrome->settings.appearance.theme_mode = (app_theme_mode)mode;
         chrome->env_theme_override = false;
+        chrome->has_cached_system_dark = false;
         chrome_apply_appearance(chrome, ui);
         changed = true;
     }
@@ -233,6 +234,10 @@ static bool draw_about_section(app_chrome *chrome, cui_ctx *ui) {
             cui_row(ui, .gap = 8, .align = CUI_ALIGN_CENTER, .wrap = true) {
                 cui_badge(ui, "Up to date", .tone = CUI_TONE_SUCCESS, .icon = CUI_ICON_CHECK);
                 cui_secondary(ui, "You have the latest version.");
+                if (cui_button(ui, "Check Again", .variant = CUI_BUTTON_GHOST,
+                               .size = CUI_SIZE_SM, .icon = CUI_ICON_REFRESH_CW)) {
+                    chrome_check_for_updates(chrome, false);
+                }
             }
             break;
         case APP_UPDATE_AVAILABLE: {
@@ -253,13 +258,21 @@ static bool draw_about_section(app_chrome *chrome, cui_ctx *ui) {
         }
         case APP_UPDATE_READY_TO_RELAUNCH:
             cui_alert(ui, "Update installed",
-                      .description = "Relaunching the updated version…",
+                      .description = chrome->update_relaunch_failed
+                          ? "Please restart the app to use the updated version."
+                          : "Relaunching the updated version…",
                       .tone = CUI_TONE_SUCCESS);
             break;
         case APP_UPDATE_ERROR:
             cui_alert(ui, upd.has_update ? "Update failed" : "Couldn’t check for updates",
                       .description = upd.error[0] ? upd.error : "Please try again later.",
                       .tone = CUI_TONE_DANGER);
+            if (!upd.has_update) {
+                if (cui_button(ui, "Try Again", .variant = CUI_BUTTON_SECONDARY,
+                               .size = CUI_SIZE_SM, .icon = CUI_ICON_REFRESH_CW)) {
+                    chrome_check_for_updates(chrome, false);
+                }
+            }
             break;
         default:
             break;
@@ -297,12 +310,13 @@ static bool draw_about_section(app_chrome *chrome, cui_ctx *ui) {
     cui_separator(ui);
     char debug_info[1536];
     chrome_format_debug_info(chrome, ui, debug_info, sizeof debug_info);
-    const char *log_path = app_log_path();
+    char log_path[1024] = "";
+    bool has_log = app_log_copy_path(log_path, sizeof log_path);
 
     cui_row(ui, .width = CUI_FILL, .gap = 8, .align = CUI_ALIGN_CENTER) {
         cui_text(ui, "Diagnostics", .font = CUI_FONT_MEDIUM);
         cui_spacer(ui);
-        if (log_path && log_path[0]) {
+        if (has_log) {
             if (cui_button(ui, "Open Log", .icon = CUI_ICON_FILE_TEXT,
                            .variant = CUI_BUTTON_GHOST, .size = CUI_SIZE_SM)) {
                 chrome_open_log_file(chrome, ui);

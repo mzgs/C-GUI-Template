@@ -16,11 +16,21 @@ int app_system_dark(void);
 bool app_os_info(char *out, size_t capacity);
 
 /* Native window helpers (backend is cui_app_backend(NULL)). */
+bool app_window_is_normal(void *native_window, const char *backend);
 bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y);
 bool app_window_set_pos(void *native_window, const char *backend, int x, int y);
-void app_window_center(void *native_window, const char *backend);
+void app_window_center(void *native_window, const char *backend, int width, int height);
 void app_window_apply_metadata(void *native_window, const char *backend);
 void app_window_set_dark(void *native_window, const char *backend, bool dark);
+void app_platform_shutdown(void);
+
+typedef struct {
+    void *user;
+    void (*on_moved)(void *user);
+    void (*on_closing)(void *user);
+    void (*on_theme_changed)(void *user);
+} app_window_hooks;
+void app_window_set_hooks(void *native_window, const char *backend, const app_window_hooks *hooks);
 
 #ifdef __APPLE__
 /* Resolve the default per-user macOS settings.json path. */
@@ -32,6 +42,7 @@ typedef bool (*app_updater_abort_fn)(void *user);
 
 /* Resolve HTTP(S) redirects via HEAD and write the final URL. */
 bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity,
+                               app_updater_abort_fn should_abort, void *abort_user,
                                char *err, size_t err_cap);
 
 /* True when the running installation can be updated in place. */

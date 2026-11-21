@@ -4,10 +4,14 @@
 #include <string.h>
 
 #ifdef _WIN32
+#include <direct.h>
 #include <process.h>
 #define getpid _getpid
+#define test_rmdir _rmdir
 #else
+#include <sys/stat.h>
 #include <unistd.h>
+#define test_rmdir rmdir
 #endif
 
 static int failures = 0;
@@ -47,17 +51,38 @@ static void on_custom(cui_ctx *ui, void *user) {
     st->last_user = user;
 }
 
-static void temp_settings_path(const char *tag, char *out, size_t cap) {
+static void temp_settings_path(const char *tag, char *dir_out, size_t dir_cap,
+                               char *file_out, size_t file_cap) {
     const char *dir = getenv("TMPDIR");
 #ifdef _WIN32
     if (!dir || !dir[0]) dir = getenv("TEMP");
     if (!dir || !dir[0]) dir = ".";
-    snprintf(out, cap, "%s\\c_gui_actions_test_%s_%d.json", dir, tag, (int)getpid());
+    snprintf(dir_out, dir_cap, "%s\\c_gui_actions_test_%s_%d", dir, tag, (int)getpid());
+    (void)_mkdir(dir_out);
+    snprintf(file_out, file_cap, "%s\\settings.json", dir_out);
 #else
     if (!dir || !dir[0]) dir = "/tmp";
-    snprintf(out, cap, "%s/c_gui_actions_test_%s_%d.json", dir, tag, (int)getpid());
+    snprintf(dir_out, dir_cap, "%s/c_gui_actions_test_%s_%d", dir, tag, (int)getpid());
+    (void)mkdir(dir_out, 0700);
+    snprintf(file_out, file_cap, "%s/settings.json", dir_out);
 #endif
-    remove(out);
+    remove(file_out);
+}
+
+static void cleanup_test_dir(const char *dir_path, const char *settings_path) {
+    remove(settings_path);
+    char log_path[1088];
+    char log_bak[1088];
+#ifdef _WIN32
+    snprintf(log_path, sizeof log_path, "%s\\app.log", dir_path);
+    snprintf(log_bak, sizeof log_bak, "%s\\app.log.1", dir_path);
+#else
+    snprintf(log_path, sizeof log_path, "%s/app.log", dir_path);
+    snprintf(log_bak, sizeof log_bak, "%s/app.log.1", dir_path);
+#endif
+    remove(log_path);
+    remove(log_bak);
+    test_rmdir(dir_path);
 }
 
 static bool write_text_file(const char *path, const char *content) {
@@ -79,14 +104,18 @@ static bool read_text_file(const char *path, char *buf, size_t cap) {
 }
 
 static void init_test_chrome(app_chrome *chrome, const char *settings_path) {
-    char *argv[] = { "actions_tests", "--settings", (char *)settings_path };
+    char arg0[] = "actions_tests";
+    char arg1[] = "--settings";
+    char arg2[1024];
+    snprintf(arg2, sizeof arg2, "%s", settings_path);
+    char *argv[] = { arg0, arg1, arg2 };
     int exit_code = 0;
     CHECK(app_chrome_init(chrome, 3, argv, &exit_code));
 }
 
 static void test_registration_and_trigger(void) {
-    char path[1024];
-    temp_settings_path("reg", path, sizeof path);
+    char dir[1024], path[1088];
+    temp_settings_path("reg", dir, sizeof dir, path, sizeof path);
 
     app_chrome chrome;
     init_test_chrome(&chrome, path);
@@ -178,12 +207,12 @@ static void test_registration_and_trigger(void) {
     CHECK(chrome.palette_open);
 
     app_chrome_shutdown(&chrome);
-    remove(path);
+    cleanup_test_dir(dir, path);
 }
 
 static void test_deferred_keybindings_persistence_and_reset(void) {
-    char path[1024];
-    temp_settings_path("persist", path, sizeof path);
+    char dir[1024], path[1088];
+    temp_settings_path("persist", dir, sizeof dir, path, sizeof path);
 
     const char *json =
         "{\n"
@@ -266,7 +295,7 @@ static void test_deferred_keybindings_persistence_and_reset(void) {
     CHECK(find_combo.key == CUI_KEY_F && find_combo.mods == CUI_MOD_PRIMARY);
 
     app_chrome_shutdown(&chrome);
-    remove(path);
+    cleanup_test_dir(dir, path);
 }
 
 static void dynamic_provider(app_palette_builder *builder, void *user) {
@@ -290,9 +319,22 @@ static void dynamic_provider(app_palette_builder *builder, void *user) {
     }));
 }
 
+static void flooding_provider(app_palette_builder *builder, void *user) {
+    (void)user;
+    for (int i = 0; i < 200; ++i) {
+        char label[32];
+        snprintf(label, sizeof label, "Item %d", i);
+        (void)app_palette_add(builder, &(app_palette_command){
+            .title = label,
+            .group = "Dynamic",
+            .on_trigger = on_custom,
+        });
+    }
+}
+
 static void test_palette_provider_and_group_coalescing(void) {
-    char path[1024];
-    temp_settings_path("palette", path, sizeof path);
+    char dir[1024], path[1088];
+    temp_settings_path("palette", dir, sizeof dir, path, sizeof path);
 
     app_chrome chrome;
     init_test_chrome(&chrome, path);
@@ -340,13 +382,30 @@ static void test_palette_provider_and_group_coalescing(void) {
         }
     }
 
+    /* Verify a flooding dynamic provider cannot crowd out built-in chrome commands */
+    app_chrome_set_palette_provider(&chrome, flooding_provider, NULL);
+    chrome_collect_palette_snapshot(&chrome, NULL, &snap);
+    CHECK(snap.count == APP_MAX_PALETTE_COMMANDS);
+    bool saw_open_settings = false, saw_theme_dark = false, saw_fullscreen = false, saw_open_log = false;
+    for (int i = 0; i < snap.count; ++i) {
+        const char *t = snap.commands[i].title;
+        if (strcmp(t, "Open Settings") == 0) saw_open_settings = true;
+        if (strcmp(t, "Theme: Dark") == 0) saw_theme_dark = true;
+        if (strcmp(t, "Toggle Fullscreen") == 0) saw_fullscreen = true;
+        if (strcmp(t, "Open Log File") == 0) saw_open_log = true;
+    }
+    CHECK(saw_open_settings);
+    CHECK(saw_theme_dark);
+    CHECK(saw_fullscreen);
+    CHECK(saw_open_log);
+
     app_chrome_shutdown(&chrome);
-    remove(path);
+    cleanup_test_dir(dir, path);
 }
 
 static void test_shortcuts_and_text_focus(void) {
-    char path[1024];
-    temp_settings_path("shortcuts", path, sizeof path);
+    char dir[1024], path[1088];
+    temp_settings_path("shortcuts", dir, sizeof dir, path, sizeof path);
 
     app_chrome chrome;
     init_test_chrome(&chrome, path);
@@ -446,9 +505,31 @@ static void test_shortcuts_and_text_focus(void) {
     cui_input_key(ui, CUI_KEY_K, false, 0);
     CHECK(!chrome.palette_open);
 
+    /* Reserved chrome shortcuts still work (and don't leak to actions) while a text input is focused. */
+#ifdef __APPLE__
+    cui_input_key(ui, CUI_KEY_F, true, CUI_MOD_PRIMARY | CUI_MOD_CTRL);
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    cui_input(ui, "test-input", text_buf, sizeof text_buf);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_key(ui, CUI_KEY_F, false, 0);
+    CHECK(st.custom_calls == 0);
+#else
+    cui_input_key(ui, CUI_KEY_COMMA, true, CUI_MOD_PRIMARY);
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    cui_input(ui, "test-input", text_buf, sizeof text_buf);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_key(ui, CUI_KEY_COMMA, false, 0);
+    CHECK(chrome.settings_open);
+    chrome.settings_open = false;
+#endif
+
     cui_destroy(ui);
     app_chrome_shutdown(&chrome);
-    remove(path);
+    cleanup_test_dir(dir, path);
 }
 
 int main(void) {

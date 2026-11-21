@@ -31,8 +31,12 @@ app_log_level app_log_get_level(void);
 /* Mirror all enabled log levels to stderr (default: false; WARN/ERROR still mirror). */
 void app_log_set_stderr(bool enabled);
 
-/* Active log file path, or "" if file logging is inactive. */
+/* Active log file path, or "" if file logging is inactive.
+ * Note: returns a pointer to internal storage; use app_log_copy_path() when
+ * app_log_init()/app_log_shutdown() may run concurrently. */
 const char *app_log_path(void);
+/* Thread-safe copy of the active log path; returns false if inactive or truncated. */
+bool app_log_copy_path(char *out, size_t capacity);
 
 #if defined(__GNUC__) || defined(__clang__)
 #define APP_LOG_PRINTF_ATTR(fmt_idx, args_idx) __attribute__((format(printf, fmt_idx, args_idx)))

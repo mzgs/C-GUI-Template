@@ -92,11 +92,25 @@ static void test_check_due(void) {
     CHECK(app_updater_check_due(base + 100, base));
 }
 
+static void test_lifecycle(void) {
+    app_updater *u = app_updater_create("mzgs/C-GUI-Template", "0.1.0");
+    CHECK(u != NULL);
+    CHECK(!app_updater_is_busy(u));
+    app_update_snapshot snap;
+    app_updater_snapshot(u, &snap);
+    CHECK(snap.state == APP_UPDATE_IDLE);
+    app_updater_destroy(u);
+
+    CHECK(app_updater_create("invalid-repo", "0.1.0") == NULL);
+    CHECK(app_updater_create("mzgs/C-GUI-Template", "") == NULL);
+}
+
 int main(void) {
     test_valid_repo();
     test_extract_release_tag();
     test_compare_versions();
     test_check_due();
+    test_lifecycle();
     if (failures > 0) {
         fprintf(stderr, "%d test(s) failed\n", failures);
         return 1;

@@ -37,10 +37,45 @@ bool app_os_info(char *out, size_t capacity) {
     return n > 0 && (size_t)n < capacity;
 }
 
+typedef HRESULT (WINAPI *PFN_DwmSetWindowAttribute)(HWND, DWORD, LPCVOID, DWORD);
+
+static HWND g_hook_hwnd = NULL;
+static WNDPROC g_prev_wndproc = NULL;
+static app_window_hooks g_window_hooks = { 0 };
+
+static LRESULT CALLBACK win32_window_hook_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    WNDPROC prev = g_prev_wndproc;
+    app_window_hooks hooks = g_window_hooks;
+    if (msg == WM_CLOSE && hooks.on_closing) {
+        hooks.on_closing(hooks.user);
+    } else if (msg == WM_EXITSIZEMOVE && hooks.on_moved) {
+        hooks.on_moved(hooks.user);
+    } else if (msg == WM_SETTINGCHANGE && lp &&
+               lstrcmpW((LPCWSTR)lp, L"ImmersiveColorSet") == 0 &&
+               hooks.on_theme_changed) {
+        hooks.on_theme_changed(hooks.user);
+    } else if (msg == WM_NCDESTROY && hwnd == g_hook_hwnd) {
+        if (prev) SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)prev);
+        g_hook_hwnd = NULL;
+        g_prev_wndproc = NULL;
+        memset(&g_window_hooks, 0, sizeof g_window_hooks);
+    }
+    return prev ? CallWindowProcW(prev, hwnd, msg, wp, lp)
+                : DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+bool app_window_is_normal(void *native_window, const char *backend) {
+    if (!native_window || !backend || strcmp(backend, "win32") != 0) return true;
+    HWND hwnd = (HWND)native_window;
+    return !IsIconic(hwnd) && !IsZoomed(hwnd);
+}
+
 bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y) {
     if (!native_window || !backend || !x || !y || strcmp(backend, "win32") != 0) return false;
+    HWND hwnd = (HWND)native_window;
+    if (IsIconic(hwnd) || IsZoomed(hwnd)) return false;
     RECT r;
-    if (!GetWindowRect((HWND)native_window, &r)) return false;
+    if (!GetWindowRect(hwnd, &r)) return false;
     *x = (int)r.left;
     *y = (int)r.top;
     return true;
@@ -69,7 +104,9 @@ bool app_window_set_pos(void *native_window, const char *backend, int x, int y) 
     return SetWindowPos(hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) != 0;
 }
 
-void app_window_center(void *native_window, const char *backend) {
+void app_window_center(void *native_window, const char *backend, int width, int height) {
+    (void)width;
+    (void)height;
     if (!native_window || !backend || strcmp(backend, "win32") != 0) return;
     HWND hwnd = (HWND)native_window;
     RECT r;
@@ -104,10 +141,63 @@ void app_window_apply_metadata(void *native_window, const char *backend) {
     }
 }
 
+void app_window_set_hooks(void *native_window, const char *backend, const app_window_hooks *hooks) {
+    if (!native_window || !backend || strcmp(backend, "win32") != 0) return;
+    HWND hwnd = (HWND)native_window;
+    if (!hooks) {
+        if (hwnd == g_hook_hwnd && g_prev_wndproc) {
+            SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)g_prev_wndproc);
+            g_hook_hwnd = NULL;
+            g_prev_wndproc = NULL;
+            memset(&g_window_hooks, 0, sizeof g_window_hooks);
+        }
+        return;
+    }
+    if (hwnd != g_hook_hwnd) {
+        if (g_hook_hwnd && IsWindow(g_hook_hwnd) && g_prev_wndproc) {
+            SetWindowLongPtrW(g_hook_hwnd, GWLP_WNDPROC, (LONG_PTR)g_prev_wndproc);
+        }
+        WNDPROC prev = (WNDPROC)(LONG_PTR)SetWindowLongPtrW(hwnd, GWLP_WNDPROC,
+                                                            (LONG_PTR)win32_window_hook_proc);
+        if (!prev) return;
+        g_hook_hwnd = hwnd;
+        g_prev_wndproc = prev;
+    }
+    g_window_hooks = *hooks;
+}
+
 void app_window_set_dark(void *native_window, const char *backend, bool dark) {
-    (void)native_window;
-    (void)backend;
-    (void)dark;
+    if (!native_window || !backend || strcmp(backend, "win32") != 0) return;
+    static PFN_DwmSetWindowAttribute set_attr = NULL;
+    static bool tried = false;
+    static HWND last_hwnd = NULL;
+    static int last_dark = -1;
+    HWND hwnd = (HWND)native_window;
+    int want = dark ? 1 : 0;
+    if (hwnd == last_hwnd && want == last_dark) return;
+    if (!tried) {
+        tried = true;
+        HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+        if (dwm) {
+            set_attr = (PFN_DwmSetWindowAttribute)(void *)GetProcAddress(dwm, "DwmSetWindowAttribute");
+        }
+    }
+    if (!set_attr) return;
+    BOOL v = dark ? TRUE : FALSE;
+    if (FAILED(set_attr(hwnd, 20 /* DWMWA_USE_IMMERSIVE_DARK_MODE */, &v, sizeof v))) {
+        set_attr(hwnd, 19 /* pre-20H1 DWMWA_USE_IMMERSIVE_DARK_MODE */, &v, sizeof v);
+    }
+    last_hwnd = hwnd;
+    last_dark = want;
+}
+
+void app_platform_shutdown(void) {
+    if (g_hook_hwnd && IsWindow(g_hook_hwnd) && g_prev_wndproc) {
+        SetWindowLongPtrW(g_hook_hwnd, GWLP_WNDPROC, (LONG_PTR)g_prev_wndproc);
+    }
+    g_hook_hwnd = NULL;
+    g_prev_wndproc = NULL;
+    memset(&g_window_hooks, 0, sizeof g_window_hooks);
 }
 
 static void win32_set_err(char *err, size_t err_cap, const char *msg) {
@@ -116,12 +206,17 @@ static void win32_set_err(char *err, size_t err_cap, const char *msg) {
 }
 
 bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity,
+                               app_updater_abort_fn should_abort, void *abort_user,
                                char *err, size_t err_cap) {
     if (!url || !final_url || capacity == 0) {
         win32_set_err(err, err_cap, "Invalid update check request.");
         return false;
     }
     final_url[0] = '\0';
+    if (should_abort && should_abort(abort_user)) {
+        win32_set_err(err, err_cap, "Update check cancelled.");
+        return false;
+    }
 
     wchar_t wide_url[2048];
     if (MultiByteToWideChar(CP_UTF8, 0, url, -1, wide_url,
@@ -150,21 +245,30 @@ bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity
     HINTERNET request = NULL;
 
     do {
-#ifdef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
-        DWORD access_type = WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY;
-#else
-        DWORD access_type = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
-#endif
         wchar_t user_agent[256] = L"CUIApp";
         MultiByteToWideChar(CP_UTF8, 0, APP_NAME "/" APP_VERSION, -1, user_agent,
                             (int)(sizeof user_agent / sizeof user_agent[0]));
-        session = WinHttpOpen(user_agent, access_type,
+#ifdef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
+        session = WinHttpOpen(user_agent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        if (!session && GetLastError() == ERROR_INVALID_PARAMETER) {
+            session = WinHttpOpen(user_agent, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                  WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+        }
+#else
+        session = WinHttpOpen(user_agent, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+#endif
         if (!session) {
             win32_set_err(err, err_cap, "Could not initialize HTTP client.");
             break;
         }
         WinHttpSetTimeouts(session, 10000, 10000, 15000, 15000);
+
+        if (should_abort && should_abort(abort_user)) {
+            win32_set_err(err, err_cap, "Update check cancelled.");
+            break;
+        }
 
         connect = WinHttpConnect(session, host, parts.nPort, 0);
         if (!connect) {
@@ -185,6 +289,10 @@ bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity
                                 WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
             !WinHttpReceiveResponse(request, NULL)) {
             win32_set_err(err, err_cap, "Could not reach GitHub.");
+            break;
+        }
+        if (should_abort && should_abort(abort_user)) {
+            win32_set_err(err, err_cap, "Update check cancelled.");
             break;
         }
 

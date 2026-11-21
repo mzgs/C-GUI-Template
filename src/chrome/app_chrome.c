@@ -76,10 +76,23 @@ bool app_contains_ignore_case(const char *text, const char *query) {
     return !*query;
 }
 
-static cui_theme_mode resolve_theme_mode(app_theme_mode mode, cui_theme_mode fallback) {
+static cui_theme_mode resolve_theme_mode(app_chrome *chrome, cui_ctx *ui,
+                                         app_theme_mode mode, cui_theme_mode fallback) {
     if (mode == APP_THEME_LIGHT) return CUI_THEME_LIGHT;
     if (mode == APP_THEME_DARK) return CUI_THEME_DARK;
-    int dark = app_system_dark();
+    int dark = -1;
+    if (chrome && ui) {
+        double now = cui_time(ui);
+        if (!chrome->has_cached_system_dark || now < chrome->system_theme_checked_at ||
+            (now - chrome->system_theme_checked_at) >= 0.5) {
+            chrome->cached_system_dark = app_system_dark();
+            chrome->system_theme_checked_at = now;
+            chrome->has_cached_system_dark = true;
+        }
+        dark = chrome->cached_system_dark;
+    } else {
+        dark = app_system_dark();
+    }
     if (dark >= 0) return dark ? CUI_THEME_DARK : CUI_THEME_LIGHT;
     return fallback;
 }
@@ -101,8 +114,8 @@ void chrome_open_settings_folder(app_chrome *chrome, cui_ctx *ui) {
 }
 
 void chrome_open_log_file(app_chrome *chrome, cui_ctx *ui) {
-    const char *path = app_log_path();
-    if (!path || !path[0] || !cui_app_open_url(path)) {
+    char path[4096];
+    if (!app_log_copy_path(path, sizeof path) || !cui_app_open_url(path)) {
         app_chrome_notify(chrome, ui, "Couldn’t open log file.", CUI_TONE_DANGER);
     }
 }
@@ -127,7 +140,8 @@ void chrome_format_debug_info(const app_chrome *chrome, cui_ctx *ui, char *out, 
 
     char settings_dir[1024] = "";
     if (chrome) app_settings_dir(settings_dir, sizeof settings_dir, chrome->cli.settings_path, false);
-    const char *log_path = app_log_path();
+    char log_path[1024] = "";
+    (void)app_log_copy_path(log_path, sizeof log_path);
 
     snprintf(out, cap,
              "App: %s %s\n"
@@ -145,7 +159,7 @@ void chrome_format_debug_info(const app_chrome *chrome, cui_ctx *ui, char *out, 
              resolved_theme, mode_name, scale_pct,
              win_w, win_h, (cui_app_ui(NULL) && cui_app_is_fullscreen(NULL)) ? " (fullscreen)" : "",
              settings_dir[0] ? settings_dir : "unknown",
-             (log_path && log_path[0]) ? log_path : "disabled");
+             log_path[0] ? log_path : "disabled");
 }
 
 void chrome_toggle_fullscreen(void) {
@@ -302,11 +316,14 @@ void app_chrome_set_palette_provider(app_chrome *chrome,
 
 void chrome_apply_appearance(app_chrome *chrome, cui_ctx *ui) {
     bool first = (chrome->appearance_ui != ui);
-    if (first) chrome->appearance_ui = ui;
+    if (first) {
+        chrome->appearance_ui = ui;
+        chrome->has_cached_system_dark = false;
+    }
 
     if (!chrome->env_theme_override) {
         cui_theme_mode current = cui_get_theme_mode(ui);
-        cui_theme_mode target = resolve_theme_mode(chrome->settings.appearance.theme_mode, current);
+        cui_theme_mode target = resolve_theme_mode(chrome, ui, chrome->settings.appearance.theme_mode, current);
         cui_set_theme(ui, target);
     }
     if (cui_app_ui(NULL) == ui) {
@@ -329,6 +346,7 @@ void chrome_apply_appearance(app_chrome *chrome, cui_ctx *ui) {
 void chrome_reload_appearance(app_chrome *chrome, cui_ctx *ui) {
     chrome->env_theme_override = false;
     chrome->env_accent_override = false;
+    chrome->has_cached_system_dark = false;
     chrome->appearance_force_motion = true;
     chrome_apply_appearance(chrome, ui);
 }
@@ -354,16 +372,21 @@ static void observe_window_pos(app_chrome *chrome) {
     chrome->observed_window_y = y;
 }
 
-static void apply_window_reset_bounds(app_chrome *chrome) {
+static void apply_window_reset_bounds(app_chrome *chrome, cui_ctx *ui) {
     cui_app_set_size(NULL, chrome->settings.window.width, chrome->settings.window.height);
-    app_window_center(cui_app_native_window(NULL), cui_app_backend(NULL));
+    app_window_center(cui_app_native_window(NULL), cui_app_backend(NULL),
+                      chrome->settings.window.width, chrome->settings.window.height);
     observe_window_pos(chrome);
+    chrome->window_reset_settling = true;
+    chrome->window_reset_settle_since = ui ? cui_time(ui) : 0.0;
+    if (ui) cui_request_wakeup(ui, 0.05f);
 }
 
 void chrome_reset_window(app_chrome *chrome, cui_ctx *ui) {
     if (cui_app_ui(NULL) != ui) return;
     chrome->window_fullscreen_pending = false;
     chrome->window_reset_pending = false;
+    chrome->window_reset_settling = false;
     if (cui_app_is_fullscreen(NULL)) {
         cui_app_set_fullscreen(NULL, false);
         if (cui_app_is_fullscreen(NULL)) {
@@ -373,11 +396,12 @@ void chrome_reset_window(app_chrome *chrome, cui_ctx *ui) {
             return;
         }
     }
-    apply_window_reset_bounds(chrome);
+    apply_window_reset_bounds(chrome, ui);
 }
 
 static bool capture_live_window_bounds(app_chrome *chrome) {
-    if (!cui_app_ui(NULL) || chrome->window_fullscreen_pending || chrome->window_reset_pending)
+    if (!cui_app_ui(NULL) || chrome->window_fullscreen_pending ||
+        chrome->window_reset_pending || chrome->window_reset_settling)
         return false;
     bool changed = false;
     bool fs = cui_app_is_fullscreen(NULL);
@@ -385,7 +409,7 @@ static bool capture_live_window_bounds(app_chrome *chrome) {
         chrome->settings.window.fullscreen = fs;
         changed = true;
     }
-    if (!fs) {
+    if (!fs && app_window_is_normal(cui_app_native_window(NULL), cui_app_backend(NULL))) {
         cui_vec2 win = cui_app_size(NULL);
         int w = (int)lroundf(win.x);
         int h = (int)lroundf(win.y);
@@ -433,6 +457,7 @@ void app_chrome_shutdown(app_chrome *chrome) {
         app_updater_destroy(chrome->updater);
         chrome->updater = NULL;
     }
+    app_platform_shutdown();
     app_log_info("Shutting down %s", APP_NAME);
     app_log_uninstall_crash_handler();
     app_log_shutdown();
@@ -452,6 +477,8 @@ void chrome_check_for_updates(app_chrome *chrome, bool silent) {
         if (app_updater_check(updater)) {
             chrome->update_check_pending = true;
             chrome->update_check_silent = silent;
+            chrome->update_notified = false;
+            chrome->update_relaunch_failed = false;
         }
     }
 }
@@ -538,6 +565,7 @@ static void chrome_poll_updater(app_chrome *chrome, cui_ctx *ui) {
         if (app_updater_relaunch(snap.relaunch_path)) {
             cui_app_quit(NULL);
         } else {
+            chrome->update_relaunch_failed = true;
             app_chrome_notify(chrome, ui, "Update installed. Please restart the app.", CUI_TONE_SUCCESS);
         }
     } else if (snap.state == APP_UPDATE_ERROR &&
@@ -599,17 +627,43 @@ static void draw_menu_group_actions(app_chrome *chrome, cui_ctx *ui, app_menu_gr
 }
 #endif
 
+static void on_window_moved(void *user) {
+    (void)user;
+    cui_ctx *ui = cui_app_ui(NULL);
+    if (ui) cui_request_redraw(ui);
+}
+
+static void on_window_closing(void *user) {
+    app_chrome *chrome = user;
+    capture_live_window_bounds(chrome);
+    save_if_dirty(chrome);
+}
+
+static void on_window_theme_changed(void *user) {
+    app_chrome *chrome = user;
+    if (chrome) chrome->has_cached_system_dark = false;
+    cui_ctx *ui = cui_app_ui(NULL);
+    if (ui) cui_request_redraw(ui);
+}
+
 static void sync_window_state(app_chrome *chrome, cui_ctx *ui) {
     if (cui_app_ui(NULL) != ui) return;
     if (chrome->window_state_ui != ui) {
         chrome->window_state_ui = ui;
         chrome->window_fullscreen_pending = false;
         chrome->window_reset_pending = false;
+        chrome->window_reset_settling = false;
         const char *backend = cui_app_backend(NULL);
         app_log_info("Window ready (backend=%s, renderer=%s)",
                      backend ? backend : "unknown",
                      cui_app_is_software(NULL) ? "Software" : "OpenGL");
         app_window_apply_metadata(cui_app_native_window(NULL), backend);
+        app_window_set_hooks(cui_app_native_window(NULL), backend, &(app_window_hooks){
+            .user = chrome,
+            .on_moved = on_window_moved,
+            .on_closing = on_window_closing,
+            .on_theme_changed = on_window_theme_changed,
+        });
         if (chrome->settings.window.has_pos) {
             app_window_set_pos(cui_app_native_window(NULL), cui_app_backend(NULL),
                                chrome->settings.window.x, chrome->settings.window.y);
@@ -633,9 +687,21 @@ static void sync_window_state(app_chrome *chrome, cui_ctx *ui) {
     if (chrome->window_reset_pending) {
         if (!cui_app_is_fullscreen(NULL)) {
             chrome->window_reset_pending = false;
-            apply_window_reset_bounds(chrome);
+            apply_window_reset_bounds(chrome, ui);
         } else if (cui_time(ui) - chrome->window_reset_since >= 2.0) {
             chrome->window_reset_pending = false;
+        } else {
+            cui_request_wakeup(ui, 0.05f);
+        }
+    }
+    if (chrome->window_reset_settling) {
+        cui_vec2 win = cui_app_size(NULL);
+        int w = (int)lroundf(win.x);
+        int h = (int)lroundf(win.y);
+        bool size_matched = (w == chrome->settings.window.width && h == chrome->settings.window.height);
+        if (size_matched || (cui_time(ui) - chrome->window_reset_settle_since >= 0.5)) {
+            chrome->window_reset_settling = false;
+            observe_window_pos(chrome);
         } else {
             cui_request_wakeup(ui, 0.05f);
         }
@@ -645,7 +711,7 @@ static void sync_window_state(app_chrome *chrome, cui_ctx *ui) {
             chrome->window_fullscreen_pending = false;
     }
     if (!chrome->window_fullscreen_pending && !chrome->window_reset_pending &&
-        capture_live_window_bounds(chrome)) {
+        !chrome->window_reset_settling && capture_live_window_bounds(chrome)) {
         chrome->window_dirty_since = cui_time(ui);
     }
     if (chrome->window_dirty) {
@@ -750,27 +816,31 @@ void app_chrome_begin_frame(app_chrome *chrome, cui_ctx *ui) {
 }
 
 static void handle_chrome_shortcuts(app_chrome *chrome, cui_ctx *ui) {
-    if (chrome->settings_open || chrome->palette_open || cui_wants_keyboard(ui)) return;
 #ifdef __APPLE__
     if (chrome->injected_edit_key != CUI_KEY_NONE) return;
-    if (cui_shortcut(ui, CUI_MOD_PRIMARY | CUI_MOD_CTRL, CUI_KEY_F)) {
+    if (!chrome->settings_open &&
+        cui_shortcut(ui, CUI_MOD_PRIMARY | CUI_MOD_CTRL, CUI_KEY_F)) {
         chrome_toggle_fullscreen();
         return;
     }
 #else
-    if (cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_COMMA)) {
-        chrome->settings_open = true;
-        return;
-    }
-    if (cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_Q)) {
-        cui_app_quit(NULL);
-        return;
-    }
-    if (cui_shortcut(ui, 0, CUI_KEY_F11)) {
-        chrome_toggle_fullscreen();
-        return;
+    if (!chrome->settings_open) {
+        if (cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_COMMA)) {
+            chrome->palette_open = false;
+            chrome->settings_open = true;
+            return;
+        }
+        if (cui_shortcut(ui, CUI_MOD_PRIMARY, CUI_KEY_Q)) {
+            cui_app_quit(NULL);
+            return;
+        }
+        if (cui_shortcut(ui, 0, CUI_KEY_F11)) {
+            chrome_toggle_fullscreen();
+            return;
+        }
     }
 #endif
+    if (chrome->settings_open || chrome->palette_open || cui_wants_keyboard(ui)) return;
     if (app_keybinding_pressed(ui, &chrome->settings, chrome->command_palette_kb)) {
         chrome->palette_open = true;
         return;
@@ -897,7 +967,7 @@ cui_app_desc app_chrome_app_desc(const app_chrome *chrome) {
         .width = chrome->settings.window.width,
         .height = chrome->settings.window.height,
         .renderer = chrome->cli.software_renderer ? CUI_RENDERER_SOFTWARE : CUI_RENDERER_AUTO,
-        .theme = resolve_theme_mode(chrome->settings.appearance.theme_mode, CUI_THEME_LIGHT),
+        .theme = resolve_theme_mode(NULL, NULL, chrome->settings.appearance.theme_mode, CUI_THEME_LIGHT),
         .accent = chrome->settings.appearance.accent,
         .follow_system_theme = false,
     };

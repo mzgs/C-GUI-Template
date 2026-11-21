@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>@APP_PLIST_NAME@</string>
 	<key>CFBundleExecutable</key>
-	<string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+	<string>@APP_PLIST_NAME@</string>
 	<key>CFBundleIconFile</key>
 	<string>app.icns</string>
 	<key>CFBundleIdentifier</key>

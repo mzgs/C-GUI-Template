@@ -20,6 +20,7 @@
 #include <wchar.h>
 #else
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -76,6 +77,7 @@ static void log_unlock(void) {
 static FILE *g_file = NULL;
 static char g_path[APP_LOG_PATH_CAP] = "";
 static size_t g_max_bytes = APP_LOG_DEFAULT_MAX_BYTES;
+static size_t g_rotate_threshold = APP_LOG_DEFAULT_MAX_BYTES;
 static size_t g_bytes_written = 0;
 static app_log_level g_level = APP_LOG_INFO;
 static bool g_mirror_all_stderr = false;
@@ -85,6 +87,10 @@ static volatile LONG g_crash_has_path = 0;
 #else
 static volatile sig_atomic_t g_crash_fd = -1;
 #endif
+
+static size_t rotate_backoff_step(void) {
+    return g_max_bytes > 65536 ? 65536 : g_max_bytes;
+}
 
 static const char *level_tag(app_log_level level) {
     switch (level) {
@@ -122,6 +128,7 @@ static bool rotate_log_file_locked(void) {
         fclose(g_file);
         g_file = NULL;
     }
+    bool moved = false;
     char backup[APP_LOG_PATH_CAP];
     int n = snprintf(backup, sizeof backup, "%s.1", g_path);
     if (n > 0 && (size_t)n < sizeof backup) {
@@ -129,21 +136,33 @@ static bool rotate_log_file_locked(void) {
         wchar_t wdst[APP_LOG_PATH_CAP];
         if (utf8_to_wide(g_path, wsrc, APP_LOG_PATH_CAP) &&
             utf8_to_wide(backup, wdst, APP_LOG_PATH_CAP)) {
-            MoveFileExW(wsrc, wdst, MOVEFILE_REPLACE_EXISTING);
+            moved = MoveFileExW(wsrc, wdst, MOVEFILE_REPLACE_EXISTING) != 0;
         }
     }
     g_bytes_written = 0;
     g_file = open_log_file(g_path, &g_bytes_written);
+    if (moved) {
+        g_rotate_threshold = g_max_bytes;
+    } else {
+        size_t step = rotate_backoff_step();
+        g_rotate_threshold = (g_bytes_written <= SIZE_MAX - step)
+            ? g_bytes_written + step : SIZE_MAX;
+    }
     return g_file != NULL;
 }
 #else
 static FILE *open_log_file(const char *path, size_t *out_size) {
-    FILE *f = fopen(path, "ab");
-    if (!f) return NULL;
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    if (fd < 0) return NULL;
+    FILE *f = fdopen(fd, "ab");
+    if (!f) {
+        close(fd);
+        return NULL;
+    }
     if (out_size) {
         *out_size = 0;
         struct stat st;
-        if (fstat(fileno(f), &st) == 0 && st.st_size > 0) {
+        if (fstat(fd, &st) == 0 && st.st_size > 0) {
             *out_size = (size_t)st.st_size;
         }
     }
@@ -156,14 +175,22 @@ static bool rotate_log_file_locked(void) {
         fclose(g_file);
         g_file = NULL;
     }
+    bool moved = false;
     char backup[APP_LOG_PATH_CAP];
     int n = snprintf(backup, sizeof backup, "%s.1", g_path);
     if (n > 0 && (size_t)n < sizeof backup) {
-        (void)rename(g_path, backup);
+        moved = (rename(g_path, backup) == 0);
     }
     g_bytes_written = 0;
     g_file = open_log_file(g_path, &g_bytes_written);
     g_crash_fd = g_file ? (sig_atomic_t)fileno(g_file) : -1;
+    if (moved) {
+        g_rotate_threshold = g_max_bytes;
+    } else {
+        size_t step = rotate_backoff_step();
+        g_rotate_threshold = (g_bytes_written <= SIZE_MAX - step)
+            ? g_bytes_written + step : SIZE_MAX;
+    }
     return g_file != NULL;
 }
 #endif
@@ -185,6 +212,7 @@ bool app_log_init(const char *path, size_t max_bytes) {
     }
     memcpy(g_path, path, len + 1);
     g_max_bytes = max_bytes > 0 ? max_bytes : APP_LOG_DEFAULT_MAX_BYTES;
+    g_rotate_threshold = g_max_bytes;
     g_bytes_written = 0;
 
     g_file = open_log_file(g_path, &g_bytes_written);
@@ -221,6 +249,7 @@ void app_log_shutdown(void) {
     }
     g_path[0] = '\0';
     g_bytes_written = 0;
+    g_rotate_threshold = g_max_bytes;
     log_unlock();
 }
 
@@ -247,6 +276,17 @@ const char *app_log_path(void) {
     return g_path;
 }
 
+bool app_log_copy_path(char *out, size_t capacity) {
+    if (!out || capacity == 0) return false;
+    out[0] = '\0';
+    log_lock();
+    size_t len = strlen(g_path);
+    bool ok = (len > 0 && len < capacity);
+    if (ok) memcpy(out, g_path, len + 1);
+    log_unlock();
+    return ok;
+}
+
 static void format_timestamp(char *buf, size_t cap) {
     time_t now = time(NULL);
     struct tm tm_buf;
@@ -268,6 +308,7 @@ static void format_timestamp(char *buf, size_t cap) {
 
 void app_log_write(app_log_level level, const char *fmt, ...) {
     if (!fmt) return;
+    if (level < app_log_get_level()) return;
 
     char msg_buf[2048];
     va_list args;
@@ -300,7 +341,7 @@ void app_log_write(app_log_level level, const char *fmt, ...) {
         fflush(stderr);
     }
     if (g_file) {
-        if (g_bytes_written > 0 && g_bytes_written + write_len > g_max_bytes) {
+        if (g_bytes_written > 0 && g_bytes_written + write_len > g_rotate_threshold) {
             (void)rotate_log_file_locked();
         }
         if (g_file) {
@@ -603,27 +644,35 @@ static void write_all_fd(int fd, const char *buf, size_t len) {
 }
 
 static void crash_reraise_default(int sig) {
-    struct sigaction dfl;
-    memset(&dfl, 0, sizeof dfl);
-    dfl.sa_handler = SIG_DFL;
-    sigemptyset(&dfl.sa_mask);
-    (void)sigaction(sig, &dfl, NULL);
+    if (sig > 0) {
+        struct sigaction dfl;
+        memset(&dfl, 0, sizeof dfl);
+        dfl.sa_handler = SIG_DFL;
+        sigemptyset(&dfl.sa_mask);
+        (void)sigaction(sig, &dfl, NULL);
 
-    sigset_t unblock;
-    sigemptyset(&unblock);
-    sigaddset(&unblock, sig);
-    (void)sigprocmask(SIG_UNBLOCK, &unblock, NULL);
+        sigset_t unblock;
+        sigemptyset(&unblock);
+        sigaddset(&unblock, sig);
+        (void)pthread_sigmask(SIG_UNBLOCK, &unblock, NULL);
 
-    (void)raise(sig);
+        (void)raise(sig);
+    }
     _exit(128 + (sig & 0x7f));
 }
 
 static void crash_signal_handler(int sig, siginfo_t *info, void *ucontext) {
     (void)ucontext;
+#if defined(__GNUC__) || defined(__clang__)
+    if (__atomic_exchange_n(&g_in_crash, 1, __ATOMIC_ACQ_REL) != 0) {
+        crash_reraise_default(sig);
+    }
+#else
     if (g_in_crash) {
         crash_reraise_default(sig);
     }
     g_in_crash = 1;
+#endif
 
     char buf[512];
     size_t pos = 0;

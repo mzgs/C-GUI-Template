@@ -51,10 +51,19 @@ static bool macos_rect_visible_on_any_screen(NSRect frame) {
     return false;
 }
 
+bool app_window_is_normal(void *native_window, const char *backend) {
+    if (!native_window || !backend || strcmp(backend, "cocoa") != 0) return true;
+    @autoreleasepool {
+        NSWindow *win = (__bridge NSWindow *)native_window;
+        return !win.isMiniaturized;
+    }
+}
+
 bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y) {
     if (!native_window || !backend || !x || !y || strcmp(backend, "cocoa") != 0) return false;
     @autoreleasepool {
         NSWindow *win = (__bridge NSWindow *)native_window;
+        if (win.isMiniaturized) return false;
         NSRect frame = win.frame;
         *x = (int)llround(frame.origin.x);
         *y = (int)llround(frame.origin.y);
@@ -77,7 +86,9 @@ bool app_window_set_pos(void *native_window, const char *backend, int x, int y) 
     }
 }
 
-void app_window_center(void *native_window, const char *backend) {
+void app_window_center(void *native_window, const char *backend, int width, int height) {
+    (void)width;
+    (void)height;
     if (!native_window || !backend || strcmp(backend, "cocoa") != 0) return;
     @autoreleasepool {
         NSWindow *win = (__bridge NSWindow *)native_window;
@@ -88,6 +99,15 @@ void app_window_center(void *native_window, const char *backend) {
 void app_window_apply_metadata(void *native_window, const char *backend) {
     (void)native_window;
     (void)backend;
+}
+
+void app_window_set_hooks(void *native_window, const char *backend, const app_window_hooks *hooks) {
+    (void)native_window;
+    (void)backend;
+    (void)hooks;
+}
+
+void app_platform_shutdown(void) {
 }
 
 void app_window_set_dark(void *native_window, const char *backend, bool dark) {
@@ -134,13 +154,25 @@ static NSString *macos_user_agent(void) {
     return [NSString stringWithFormat:@"%s/%s", APP_NAME, APP_VERSION];
 }
 
+static int macos_max_close_fd(void) {
+    long limit = sysconf(_SC_OPEN_MAX);
+    if (limit < STDERR_FILENO + 1) return 256;
+    if (limit > 4096) return 4096;
+    return (int)limit;
+}
+
 bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity,
+                               app_updater_abort_fn should_abort, void *abort_user,
                                char *err, size_t err_cap) {
     if (!url || !final_url || capacity == 0) {
         macos_set_err(err, err_cap, "Invalid update check request.");
         return false;
     }
     final_url[0] = '\0';
+    if (should_abort && should_abort(abort_user)) {
+        macos_set_err(err, err_cap, "Update check cancelled.");
+        return false;
+    }
 
     @autoreleasepool {
         NSString *urlStr = [NSString stringWithUTF8String:url];
@@ -181,8 +213,21 @@ bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity
                 dispatch_semaphore_signal(sem);
             }];
         [task resume];
-        dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-        [session finishTasksAndInvalidate];
+        bool aborted = false;
+        for (;;) {
+            dispatch_time_t slice = dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC);
+            if (dispatch_semaphore_wait(sem, slice) == 0) break;
+            if (!aborted && should_abort && should_abort(abort_user)) {
+                aborted = true;
+                [task cancel];
+                [session invalidateAndCancel];
+            }
+        }
+        if (!aborted) [session finishTasksAndInvalidate];
+        if (aborted) {
+            macos_set_err(err, err_cap, "Update check cancelled.");
+            return false;
+        }
 
         if (errMsg) {
             macos_set_err(err, err_cap, errMsg.UTF8String);
@@ -222,7 +267,8 @@ bool app_updater_can_self_update(void) {
     }
 }
 
-static bool macos_run_tool(NSString *launchPath, NSArray<NSString *> *args) {
+static bool macos_run_tool(NSString *launchPath, NSArray<NSString *> *args,
+                           app_updater_abort_fn should_abort, void *abort_user) {
     NSTask *task = [[NSTask alloc] init];
     task.executableURL = [NSURL fileURLWithPath:launchPath];
     task.arguments = args;
@@ -231,8 +277,17 @@ static bool macos_run_tool(NSString *launchPath, NSArray<NSString *> *args) {
     task.standardError = nullHandle;
     NSError *error = nil;
     if (![task launchAndReturnError:&error]) return false;
+    bool aborted = false;
+    while ([task isRunning]) {
+        if (!aborted && should_abort && should_abort(abort_user)) {
+            aborted = true;
+            [task terminate];
+            break;
+        }
+        usleep(25000);
+    }
     [task waitUntilExit];
-    return task.terminationReason == NSTaskTerminationReasonExit && task.terminationStatus == 0;
+    return !aborted && task.terminationReason == NSTaskTerminationReasonExit && task.terminationStatus == 0;
 }
 
 bool app_updater_install_release(const char *repo, const char *tag,
@@ -320,15 +375,24 @@ bool app_updater_install_release(const char *repo, const char *tag,
                     dispatch_semaphore_signal(sem);
                 }];
             [task resume];
-            dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-            [session finishTasksAndInvalidate];
+            bool dlAborted = false;
+            for (;;) {
+                dispatch_time_t slice = dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC);
+                if (dispatch_semaphore_wait(sem, slice) == 0) break;
+                if (!dlAborted && should_abort && should_abort(abort_user)) {
+                    dlAborted = true;
+                    [task cancel];
+                    [session invalidateAndCancel];
+                }
+            }
+            if (!dlAborted) [session finishTasksAndInvalidate];
 
-            if (dlErr) {
-                macos_set_err(err, err_cap, dlErr.UTF8String);
+            if (dlAborted || (should_abort && should_abort(abort_user))) {
+                macos_set_err(err, err_cap, "Update cancelled.");
                 break;
             }
-            if (should_abort && should_abort(abort_user)) {
-                macos_set_err(err, err_cap, "Update cancelled.");
+            if (dlErr) {
+                macos_set_err(err, err_cap, dlErr.UTF8String);
                 break;
             }
 
@@ -336,8 +400,12 @@ bool app_updater_install_release(const char *repo, const char *tag,
                 macos_set_err(err, err_cap, "Could not prepare extraction directory.");
                 break;
             }
-            if (!macos_run_tool(@"/usr/bin/ditto", @[ @"-x", @"-k", archivePath, extractDir ])) {
-                macos_set_err(err, err_cap, "Could not extract update archive.");
+            if (!macos_run_tool(@"/usr/bin/ditto", @[ @"-x", @"-k", archivePath, extractDir ],
+                                should_abort, abort_user)) {
+                macos_set_err(err, err_cap,
+                              (should_abort && should_abort(abort_user))
+                                  ? "Update cancelled."
+                                  : "Could not extract update archive.");
                 break;
             }
 
@@ -365,11 +433,16 @@ bool app_updater_install_release(const char *repo, const char *tag,
             [fm removeItemAtPath:stagedPath error:nil];
             [fm removeItemAtPath:backupPath error:nil];
 
-            if (!macos_run_tool(@"/usr/bin/ditto", @[ srcApp, stagedPath ])) {
-                macos_set_err(err, err_cap, "Could not stage updated app bundle.");
+            if (!macos_run_tool(@"/usr/bin/ditto", @[ srcApp, stagedPath ],
+                                should_abort, abort_user)) {
+                macos_set_err(err, err_cap,
+                              (should_abort && should_abort(abort_user))
+                                  ? "Update cancelled."
+                                  : "Could not stage updated app bundle.");
                 break;
             }
-            (void)macos_run_tool(@"/usr/bin/xattr", @[ @"-dr", @"com.apple.quarantine", stagedPath ]);
+            (void)macos_run_tool(@"/usr/bin/xattr", @[ @"-dr", @"com.apple.quarantine", stagedPath ],
+                                 should_abort, abort_user);
 
             if (should_abort && should_abort(abort_user)) {
                 macos_set_err(err, err_cap, "Update cancelled.");
@@ -409,6 +482,7 @@ bool app_updater_relaunch(const char *relaunch_path) {
     if (!relaunch_path || !relaunch_path[0]) return false;
     char pid_str[32];
     snprintf(pid_str, sizeof pid_str, "%ld", (long)getpid());
+    int max_fd = macos_max_close_fd();
 
     pid_t pid = fork();
     if (pid < 0) return false;
@@ -423,6 +497,9 @@ bool app_updater_relaunch(const char *relaunch_path) {
             (void)dup2(devnull, STDOUT_FILENO);
             (void)dup2(devnull, STDERR_FILENO);
             if (devnull > STDERR_FILENO) close(devnull);
+        }
+        for (int fd = STDERR_FILENO + 1; fd < max_fd; ++fd) {
+            close(fd);
         }
         static const char script[] =
             "pid=\"$1\"; app=\"$2\"; i=0; "

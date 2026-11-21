@@ -3,11 +3,14 @@
 #endif
 
 #include "platform.h"
+#include <cui/cui_app.h>
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #if defined(__has_include)
@@ -51,14 +55,19 @@ bool app_os_info(char *out, size_t capacity) {
 }
 
 #ifdef APP_HAVE_X11
+static Display *g_x11_dpy = NULL;
+static bool g_x11_tried = false;
+
 static Display *x11_display(void) {
-    static Display *dpy;
-    static bool tried;
-    if (!tried) {
-        tried = true;
-        dpy = XOpenDisplay(NULL);
+    if (!g_x11_tried) {
+        g_x11_tried = true;
+        g_x11_dpy = XOpenDisplay(NULL);
+        if (g_x11_dpy) {
+            int fd = ConnectionNumber(g_x11_dpy);
+            if (fd >= 0) (void)fcntl(fd, F_SETFD, FD_CLOEXEC);
+        }
     }
-    return dpy;
+    return g_x11_dpy;
 }
 
 static void x11_frame_extents(Display *dpy, Window win, int *left, int *top) {
@@ -80,7 +89,51 @@ static void x11_frame_extents(Display *dpy, Window win, int *left, int *top) {
         XFree(data);
     }
 }
+
+static bool x11_window_has_abnormal_state(Display *dpy, Window win) {
+    Atom prop = XInternAtom(dpy, "_NET_WM_STATE", True);
+    if (!prop) return false;
+    Atom hidden = XInternAtom(dpy, "_NET_WM_STATE_HIDDEN", True);
+    Atom max_h = XInternAtom(dpy, "_NET_WM_STATE_MAXIMIZED_HORZ", True);
+    Atom max_v = XInternAtom(dpy, "_NET_WM_STATE_MAXIMIZED_VERT", True);
+    Atom actual_type = 0;
+    int actual_format = 0;
+    unsigned long nitems = 0, bytes_after = 0;
+    unsigned char *data = NULL;
+    bool abnormal = false;
+    if (XGetWindowProperty(dpy, win, prop, 0, 64, False, XA_ATOM,
+                           &actual_type, &actual_format, &nitems, &bytes_after, &data) == Success && data) {
+        if (actual_type == XA_ATOM && actual_format == 32) {
+            Atom *atoms = (Atom *)data;
+            for (unsigned long i = 0; i < nitems; ++i) {
+                if ((hidden && atoms[i] == hidden) ||
+                    (max_h && atoms[i] == max_h) ||
+                    (max_v && atoms[i] == max_v)) {
+                    abnormal = true;
+                    break;
+                }
+            }
+        }
+        XFree(data);
+    }
+    return abnormal;
+}
 #endif
+
+bool app_window_is_normal(void *native_window, const char *backend) {
+    if (!native_window || !backend) return true;
+#ifdef APP_HAVE_X11
+    if (strcmp(backend, "x11") == 0) {
+        Display *dpy = x11_display();
+        if (!dpy) return true;
+        Window win = (Window)(uintptr_t)native_window;
+        XWindowAttributes attr;
+        if (!XGetWindowAttributes(dpy, win, &attr) || attr.map_state != IsViewable) return false;
+        return !x11_window_has_abnormal_state(dpy, win);
+    }
+#endif
+    return true;
+}
 
 bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y) {
     if (!native_window || !backend || !x || !y) return false;
@@ -92,7 +145,9 @@ bool app_window_get_pos(void *native_window, const char *backend, int *x, int *y
         XWindowAttributes attr;
         Window child = 0;
         int rx = 0, ry = 0;
-        if (!XGetWindowAttributes(dpy, win, &attr) || !attr.root) return false;
+        if (!XGetWindowAttributes(dpy, win, &attr) || !attr.root || attr.map_state != IsViewable)
+            return false;
+        if (x11_window_has_abnormal_state(dpy, win)) return false;
         if (!XTranslateCoordinates(dpy, win, attr.root, 0, 0, &rx, &ry, &child)) return false;
         int left = 0, top = 0;
         x11_frame_extents(dpy, win, &left, &top);
@@ -128,21 +183,35 @@ bool app_window_set_pos(void *native_window, const char *backend, int x, int y) 
     return false;
 }
 
-void app_window_center(void *native_window, const char *backend) {
+void app_window_center(void *native_window, const char *backend, int width, int height) {
     if (!native_window || !backend) return;
 #ifdef APP_HAVE_X11
     if (strcmp(backend, "x11") == 0) {
         Display *dpy = x11_display();
         if (!dpy) return;
         Window win = (Window)(uintptr_t)native_window;
-        XWindowAttributes attr;
-        if (!XGetWindowAttributes(dpy, win, &attr)) return;
+        int win_w = 0, win_h = 0;
+        if (width > 0 && height > 0) {
+            cui_ctx *ui = cui_app_ui(NULL);
+            float scale = ui ? cui_dpi_scale(ui) : 1.0f;
+            if (scale <= 0.0f) scale = 1.0f;
+            win_w = (int)((float)width * scale + 0.5f);
+            win_h = (int)((float)height * scale + 0.5f);
+        } else {
+            XWindowAttributes attr;
+            if (!XGetWindowAttributes(dpy, win, &attr)) return;
+            win_w = attr.width;
+            win_h = attr.height;
+        }
         int scr = DefaultScreen(dpy);
-        int cx = (DisplayWidth(dpy, scr) - attr.width) / 2;
-        int cy = (DisplayHeight(dpy, scr) - attr.height) / 2;
+        int cx = (DisplayWidth(dpy, scr) - win_w) / 2;
+        int cy = (DisplayHeight(dpy, scr) - win_h) / 2;
         XMoveWindow(dpy, win, cx > 0 ? cx : 0, cy > 0 ? cy : 0);
         XFlush(dpy);
     }
+#else
+    (void)width;
+    (void)height;
 #endif
 }
 
@@ -166,10 +235,26 @@ void app_window_apply_metadata(void *native_window, const char *backend) {
 #endif
 }
 
+void app_window_set_hooks(void *native_window, const char *backend, const app_window_hooks *hooks) {
+    (void)native_window;
+    (void)backend;
+    (void)hooks;
+}
+
 void app_window_set_dark(void *native_window, const char *backend, bool dark) {
     (void)native_window;
     (void)backend;
     (void)dark;
+}
+
+void app_platform_shutdown(void) {
+#ifdef APP_HAVE_X11
+    if (g_x11_dpy) {
+        XCloseDisplay(g_x11_dpy);
+        g_x11_dpy = NULL;
+    }
+    g_x11_tried = false;
+#endif
 }
 
 static void linux_set_err(char *err, size_t err_cap, const char *msg) {
@@ -187,13 +272,23 @@ static const char *linux_release_arch(void) {
 #endif
 }
 
-static bool linux_run_process(char *const argv[], char *out, size_t out_cap) {
+static int linux_max_close_fd(void) {
+    long limit = sysconf(_SC_OPEN_MAX);
+    if (limit < STDERR_FILENO + 1) return 256;
+    if (limit > 4096) return 4096;
+    return (int)limit;
+}
+
+static bool linux_run_process(char *const argv[], char *out, size_t out_cap,
+                              app_updater_abort_fn should_abort, void *abort_user) {
+    if (should_abort && should_abort(abort_user)) return false;
     int pipefd[2] = { -1, -1 };
     if (out && out_cap > 0) {
         out[0] = '\0';
         if (pipe(pipefd) != 0) return false;
     }
 
+    int max_fd = linux_max_close_fd();
     pid_t pid = fork();
     if (pid < 0) {
         if (pipefd[0] >= 0) close(pipefd[0]);
@@ -217,27 +312,51 @@ static bool linux_run_process(char *const argv[], char *out, size_t out_cap) {
             (void)dup2(devnull, STDERR_FILENO);
             if (devnull > STDERR_FILENO) close(devnull);
         }
+        for (int fd = STDERR_FILENO + 1; fd < max_fd; ++fd) {
+            close(fd);
+        }
         execvp(argv[0], argv);
         _exit(127);
     }
 
     if (pipefd[1] >= 0) close(pipefd[1]);
     bool truncated = false;
+    bool aborted = false;
+    bool reaped = false;
+    int status = 0;
+
     if (pipefd[0] >= 0) {
         size_t len = 0;
         for (;;) {
-            char chunk[256];
-            ssize_t r = read(pipefd[0], chunk, sizeof chunk);
-            if (r < 0) {
+            if (should_abort && should_abort(abort_user)) {
+                aborted = true;
+                (void)kill(pid, SIGTERM);
+                break;
+            }
+            struct pollfd pfd;
+            pfd.fd = pipefd[0];
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            int pr = poll(&pfd, 1, 50);
+            if (pr < 0) {
                 if (errno == EINTR) continue;
                 break;
             }
-            if (r == 0) break;
-            if (len + (size_t)r < out_cap) {
-                memcpy(out + len, chunk, (size_t)r);
-                len += (size_t)r;
-            } else {
-                truncated = true;
+            if (pr == 0) continue;
+            if (pfd.revents & (POLLIN | POLLHUP | POLLERR)) {
+                char chunk[256];
+                ssize_t r = read(pipefd[0], chunk, sizeof chunk);
+                if (r < 0) {
+                    if (errno == EINTR) continue;
+                    break;
+                }
+                if (r == 0) break;
+                if (len + (size_t)r < out_cap) {
+                    memcpy(out + len, chunk, (size_t)r);
+                    len += (size_t)r;
+                } else {
+                    truncated = true;
+                }
             }
         }
         close(pipefd[0]);
@@ -247,11 +366,27 @@ static bool linux_run_process(char *const argv[], char *out, size_t out_cap) {
         }
     }
 
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) return false;
+    int abort_waits = 0;
+    for (;;) {
+        pid_t w = waitpid(pid, &status, should_abort ? WNOHANG : 0);
+        if (w == pid) {
+            reaped = true;
+            break;
+        }
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (!aborted && should_abort && should_abort(abort_user)) {
+            aborted = true;
+            (void)kill(pid, SIGTERM);
+        } else if (aborted && ++abort_waits >= 20) {
+            (void)kill(pid, SIGKILL);
+        }
+        struct timespec ts = { 0, 25000000L };
+        (void)nanosleep(&ts, NULL);
     }
-    return !truncated && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return reaped && !aborted && !truncated && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
 static bool linux_current_exe(char *exe_path, size_t cap) {
@@ -324,6 +459,7 @@ static bool linux_copy_executable(const char *src, const char *dst) {
 }
 
 bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity,
+                               app_updater_abort_fn should_abort, void *abort_user,
                                char *err, size_t err_cap) {
     if (!url || !final_url || capacity == 0) {
         linux_set_err(err, err_cap, "Invalid update check request.");
@@ -334,8 +470,12 @@ bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity
         "-o", "/dev/null", "-w", "%{url_effective}",
         "--", (char *)url, NULL
     };
-    if (!linux_run_process(argv, final_url, capacity) || !final_url[0]) {
-        linux_set_err(err, err_cap, "Could not reach GitHub (check network connection and curl).");
+    if (!linux_run_process(argv, final_url, capacity, should_abort, abort_user) || !final_url[0]) {
+        if (should_abort && should_abort(abort_user)) {
+            linux_set_err(err, err_cap, "Update check cancelled.");
+        } else {
+            linux_set_err(err, err_cap, "Could not reach GitHub (check network connection and curl).");
+        }
         return false;
     }
     return true;
@@ -428,8 +568,11 @@ bool app_updater_install_release(const char *repo, const char *tag,
             "curl", "-fsSL", "--max-time", "180",
             "-o", archive_path, "--", url, NULL
         };
-        if (!linux_run_process(curl_argv, NULL, 0)) {
-            linux_set_err(err, err_cap, "Could not download the Linux release archive.");
+        if (!linux_run_process(curl_argv, NULL, 0, should_abort, abort_user)) {
+            linux_set_err(err, err_cap,
+                          (should_abort && should_abort(abort_user))
+                              ? "Update cancelled."
+                              : "Could not download the Linux release archive.");
             break;
         }
         if (should_abort && should_abort(abort_user)) {
@@ -442,8 +585,11 @@ bool app_updater_install_release(const char *repo, const char *tag,
         }
 
         char *tar_argv[] = { "tar", "-xzf", archive_path, "-C", extract_dir, NULL };
-        if (!linux_run_process(tar_argv, NULL, 0)) {
-            linux_set_err(err, err_cap, "Could not extract update archive.");
+        if (!linux_run_process(tar_argv, NULL, 0, should_abort, abort_user)) {
+            linux_set_err(err, err_cap,
+                          (should_abort && should_abort(abort_user))
+                              ? "Update cancelled."
+                              : "Could not extract update archive.");
             break;
         }
 
@@ -508,6 +654,7 @@ bool app_updater_relaunch(const char *relaunch_path) {
     if (!relaunch_path || !relaunch_path[0]) return false;
     char pid_str[32];
     snprintf(pid_str, sizeof pid_str, "%ld", (long)getpid());
+    int max_fd = linux_max_close_fd();
 
     pid_t pid = fork();
     if (pid < 0) return false;
@@ -522,6 +669,9 @@ bool app_updater_relaunch(const char *relaunch_path) {
             (void)dup2(devnull, STDOUT_FILENO);
             (void)dup2(devnull, STDERR_FILENO);
             if (devnull > STDERR_FILENO) close(devnull);
+        }
+        for (int fd = STDERR_FILENO + 1; fd < max_fd; ++fd) {
+            close(fd);
         }
         static const char script[] =
             "pid=\"$1\"; bin=\"$2\"; i=0; "

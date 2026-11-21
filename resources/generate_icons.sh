@@ -5,9 +5,18 @@ set -eu
 # from resources/app.png (expected to be a square PNG, ideally 1024x1024).
 # Requires macOS (sips, iconutil) and python3.
 
-cd -- "$(dirname -- "$0")"
+SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+if [ "$#" -ge 1 ]; then
+    case "$1" in
+        /*) SRC="$1" ;;
+        *)  SRC="$(pwd)/$1" ;;
+    esac
+else
+    SRC="$SCRIPT_DIR/app.png"
+fi
 
-SRC="${1:-app.png}"
+cd -- "$SCRIPT_DIR"
+
 if [ ! -f "$SRC" ]; then
     echo "Source icon not found: $SRC" >&2
     exit 1

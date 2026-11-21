@@ -106,6 +106,7 @@ typedef struct {
     bool update_check_silent;
     bool update_notified;
     bool update_relaunching;
+    bool update_relaunch_failed;
     int update_toast_handle;
     int last_update_state;
 
@@ -118,12 +119,17 @@ typedef struct {
     double window_fullscreen_since;
     bool window_reset_pending;
     double window_reset_since;
+    bool window_reset_settling;
+    double window_reset_settle_since;
     bool observed_window_has_pos;
     int observed_window_x;
     int observed_window_y;
     cui_ctx *window_state_ui;
     cui_ctx *appearance_ui;
     bool appearance_force_motion;
+    bool has_cached_system_dark;
+    int cached_system_dark;
+    double system_theme_checked_at;
     bool env_theme_override;
     bool env_accent_override;
     bool env_screenshot_mode;

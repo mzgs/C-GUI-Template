@@ -342,7 +342,9 @@ void app_menu_sync(const app_menu_state *state) {
     AppMenuTarget *target = shared_menu_target;
     bool force = !target.hasSyncedState;
 
-    sync_combo_item(target.paletteItem, target.lastPaletteCombo, state->palette_combo, force);
+    @autoreleasepool {
+        sync_combo_item(target.paletteItem, target.lastPaletteCombo, state->palette_combo, force);
+    }
     if (force || target.lastFullscreen != state->fullscreen) {
         target.fullscreenItem.title = state->fullscreen ? @"Exit Full Screen" : @"Enter Full Screen";
     }

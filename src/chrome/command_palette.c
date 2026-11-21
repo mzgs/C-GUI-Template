@@ -27,6 +27,7 @@ struct app_palette_builder {
     cui_command commands[APP_MAX_PALETTE_COMMANDS];
     palette_dispatch dispatch[APP_MAX_PALETTE_COMMANDS];
     int count;
+    int max_dynamic;
     char text_pool[8192];
     size_t text_used;
     void *default_user;
@@ -47,7 +48,9 @@ static bool palette_push_raw(app_palette_builder *builder,
                              const char *group, const char *shortcut,
                              app_action_fn on_trigger, void *user,
                              int builtin_id) {
-    if (!builder || !title || !title[0] || builder->count >= APP_MAX_PALETTE_COMMANDS)
+    int limit = (builtin_id == BUILTIN_NONE && builder && builder->max_dynamic > 0)
+        ? builder->max_dynamic : APP_MAX_PALETTE_COMMANDS;
+    if (!builder || !title || !title[0] || builder->count >= limit)
         return false;
     int idx = builder->count++;
     builder->commands[idx] = (cui_command){
@@ -66,7 +69,8 @@ static bool palette_push_raw(app_palette_builder *builder,
 
 bool app_palette_add(app_palette_builder *builder, const app_palette_command *cmd) {
     if (!builder || !cmd || !cmd->title || !cmd->title[0]) return false;
-    if (builder->count >= APP_MAX_PALETTE_COMMANDS) return false;
+    int limit = builder->max_dynamic > 0 ? builder->max_dynamic : APP_MAX_PALETTE_COMMANDS;
+    if (builder->count >= limit) return false;
 
     size_t saved_used = builder->text_used;
     const char *title = pool_strdup(builder, cmd->title);
@@ -131,6 +135,8 @@ static void coalesce_groups(const app_palette_builder *builder,
 
 static void populate_palette(app_chrome *chrome, cui_ctx *ui, app_palette_builder *builder) {
     memset(builder, 0, sizeof *builder);
+    int builtin_count = 10 + (app_updater_configured() ? 1 : 0);
+    builder->max_dynamic = APP_MAX_PALETTE_COMMANDS - builtin_count;
 
     /* 1. App-registered actions */
     for (int i = 0; i < chrome->action_count; ++i) {
@@ -242,6 +248,7 @@ static void dispatch_builtin(app_chrome *chrome, cui_ctx *ui, int builtin_id) {
         int idx = builtin_id - BUILTIN_THEME_SYSTEM;
         chrome->settings.appearance.theme_mode = modes[idx];
         chrome->env_theme_override = false;
+        chrome->has_cached_system_dark = false;
         chrome_apply_appearance(chrome, ui);
         if (chrome_save_settings(chrome, ui))
             app_chrome_notify(chrome, ui, messages[idx], CUI_TONE_INFO);

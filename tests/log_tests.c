@@ -50,9 +50,14 @@ static void test_write_and_filter(void) {
     char path[1024], backup[1024];
     temp_log_paths("basic", path, sizeof path, backup, sizeof backup);
 
+    char copied[1024] = "";
     CHECK(strcmp(app_log_path(), "") == 0);
+    CHECK(!app_log_copy_path(copied, sizeof copied));
     CHECK(app_log_init(path, 4096));
     CHECK(strcmp(app_log_path(), path) == 0);
+    CHECK(app_log_copy_path(copied, sizeof copied));
+    CHECK(strcmp(copied, path) == 0);
+    CHECK(!app_log_copy_path(copied, 4));
 
     app_log_set_level(APP_LOG_INFO);
     app_log_debug("hidden debug %d", 1);
@@ -61,6 +66,7 @@ static void test_write_and_filter(void) {
     app_log_debug("visible debug %d", 2);
     app_log_shutdown();
     CHECK(strcmp(app_log_path(), "") == 0);
+    CHECK(!app_log_copy_path(copied, sizeof copied));
 
     char content[2048];
     CHECK(read_all(path, content, sizeof content));
