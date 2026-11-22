@@ -138,9 +138,9 @@ void chrome_format_debug_info(const app_chrome *chrome, cui_ctx *ui, char *out, 
     if (win_w <= 0 && chrome) win_w = chrome->settings.window.width;
     if (win_h <= 0 && chrome) win_h = chrome->settings.window.height;
 
-    char settings_dir[1024] = "";
+    char settings_dir[4096] = "";
     if (chrome) app_settings_dir(settings_dir, sizeof settings_dir, chrome->cli.settings_path, false);
-    char log_path[1024] = "";
+    char log_path[4096] = "";
     (void)app_log_copy_path(log_path, sizeof log_path);
 
     snprintf(out, cap,
@@ -493,24 +493,6 @@ static void save_if_dirty(app_chrome *chrome) {
 
 void app_chrome_shutdown(app_chrome *chrome) {
     if (!chrome) return;
-    /* Stop platform watchers (e.g. X11 ConfigureNotify thread) before consuming final position. */
-    app_platform_shutdown();
-    int pending_x = 0, pending_y = 0;
-    if (!chrome->settings.window.fullscreen &&
-        !chrome->window_fullscreen_pending &&
-        !chrome->window_reset_pending &&
-        !chrome->window_reset_settling &&
-        chrome->observed_window_has_pos &&
-        app_window_consume_pending_pos(&pending_x, &pending_y)) {
-        if ((pending_x != chrome->observed_window_x || pending_y != chrome->observed_window_y) &&
-            (!chrome->settings.window.has_pos ||
-             pending_x != chrome->settings.window.x || pending_y != chrome->settings.window.y)) {
-            chrome->settings.window.has_pos = true;
-            chrome->settings.window.x = pending_x;
-            chrome->settings.window.y = pending_y;
-            chrome->window_dirty = true;
-        }
-    }
     save_if_dirty(chrome);
     chrome->native_window = NULL;
     chrome->window_backend = NULL;
@@ -521,6 +503,7 @@ void app_chrome_shutdown(app_chrome *chrome) {
 #ifdef __APPLE__
     app_menu_shutdown();
 #endif
+    app_platform_shutdown();
     app_log_info("Shutting down %s", APP_NAME);
     app_log_uninstall_crash_handler();
     app_log_shutdown();
@@ -550,6 +533,11 @@ void chrome_start_update(app_chrome *chrome, cui_ctx *ui) {
     app_update_snapshot snap;
     chrome_updater_snapshot(chrome, &snap);
     if (!snap.has_update) return;
+
+    if (ui && chrome->update_toast_handle > 0) {
+        cui_toast_dismiss(ui, chrome->update_toast_handle);
+        chrome->update_toast_handle = 0;
+    }
 
     chrome->update_check_silent = false;
     if (app_updater_can_self_update()) {
@@ -927,8 +915,16 @@ static void handle_chrome_shortcuts(app_chrome *chrome, cui_ctx *ui) {
 }
 
 void app_chrome_end_frame(app_chrome *chrome, cui_ctx *ui) {
+    bool palette_was_open = chrome->palette_open;
     handle_chrome_shortcuts(chrome, ui);
-    chrome_draw_command_palette(chrome, ui);
+    /* Defer drawing a newly shortcut-opened palette to the next frame so the
+     * triggering key/text event cannot leak into it (e.g. '/', Enter, Esc). */
+    bool defer_palette = !palette_was_open && chrome->palette_open;
+    if (defer_palette) {
+        cui_request_redraw(ui);
+    } else {
+        chrome_draw_command_palette(chrome, ui);
+    }
     chrome_draw_settings_dialog(chrome, ui);
     chrome_poll_updater(chrome, ui);
 #ifdef __APPLE__
@@ -991,7 +987,23 @@ static bool parse_cli(int argc, char **argv, app_cli_opts *opts, int *exit_code)
     return true;
 }
 
+static bool is_valid_cui_theme_env(const char *val) {
+    return val && (strcmp(val, "dark") == 0 || strcmp(val, "light") == 0);
+}
+
+static bool is_valid_cui_accent_env(const char *val) {
+    if (!val || !val[0]) return false;
+    for (int i = 0; i < CUI_ACCENT_COUNT; ++i) {
+        if (strcmp(val, cui_accent_name((cui_accent)i)) == 0) return true;
+    }
+    return false;
+}
+
 bool app_chrome_init(app_chrome *chrome, int argc, char **argv, int *exit_code) {
+    if (!chrome) {
+        if (exit_code) *exit_code = 1;
+        return false;
+    }
     app_cli_opts cli;
     if (!parse_cli(argc, argv, &cli, exit_code)) return false;
 
@@ -1035,8 +1047,8 @@ bool app_chrome_init(app_chrome *chrome, int argc, char **argv, int *exit_code) 
     const char *env_theme = getenv("CUI_THEME");
     const char *env_accent = getenv("CUI_ACCENT");
     const char *env_screenshot = getenv("CUI_SCREENSHOT");
-    chrome->env_theme_override = env_theme && env_theme[0] != '\0';
-    chrome->env_accent_override = env_accent && env_accent[0] != '\0';
+    chrome->env_theme_override = is_valid_cui_theme_env(env_theme);
+    chrome->env_accent_override = is_valid_cui_accent_env(env_accent);
     chrome->env_screenshot_mode = env_screenshot && env_screenshot[0] != '\0';
     return true;
 }

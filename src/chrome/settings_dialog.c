@@ -314,9 +314,9 @@ static bool draw_about_section(app_chrome *chrome, cui_ctx *ui) {
     }
 
     cui_separator(ui);
-    char debug_info[1536];
+    char debug_info[4096];
     chrome_format_debug_info(chrome, ui, debug_info, sizeof debug_info);
-    char log_path[1024] = "";
+    char log_path[4096] = "";
     bool has_log = app_log_copy_path(log_path, sizeof log_path);
 
     cui_row(ui, .width = CUI_FILL, .gap = 8, .align = CUI_ALIGN_CENTER) {

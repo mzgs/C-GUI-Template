@@ -463,80 +463,70 @@ static bool spawn_worker_locked(void *(*fn)(void *), app_updater *u) {
 
 bool app_updater_check(app_updater *updater) {
     if (!updater) return false;
-    mutex_lock(&updater->mu);
-    if (updater->destroyed ||
-        updater->snap.state == APP_UPDATE_CHECKING ||
-        updater->snap.state == APP_UPDATE_UPDATING ||
-        updater->snap.state == APP_UPDATE_READY_TO_RELAUNCH) {
+    for (;;) {
+        mutex_lock(&updater->mu);
+        if (updater->destroyed ||
+            updater->snap.state == APP_UPDATE_CHECKING ||
+            updater->snap.state == APP_UPDATE_UPDATING ||
+            updater->snap.state == APP_UPDATE_READY_TO_RELAUNCH) {
+            mutex_unlock(&updater->mu);
+            return false;
+        }
+        if (updater->has_worker) {
+            mutex_unlock(&updater->mu);
+            updater_join_worker(updater, true);
+            continue;
+        }
+        memset(&updater->snap, 0, sizeof updater->snap);
+        updater->snap.state = APP_UPDATE_CHECKING;
+        updater->refcount++;
+        bool spawned = spawn_worker_locked(check_thread_entry, updater);
+        if (!spawned) {
+            updater->snap.state = APP_UPDATE_ERROR;
+            snprintf(updater->snap.error, sizeof updater->snap.error, "Could not start update check.");
+        }
         mutex_unlock(&updater->mu);
-        return false;
-    }
-    bool need_join = updater->has_worker;
-    mutex_unlock(&updater->mu);
-    if (need_join) updater_join_worker(updater, true);
 
-    mutex_lock(&updater->mu);
-    if (updater->destroyed ||
-        updater->snap.state == APP_UPDATE_CHECKING ||
-        updater->snap.state == APP_UPDATE_UPDATING ||
-        updater->snap.state == APP_UPDATE_READY_TO_RELAUNCH) {
-        mutex_unlock(&updater->mu);
-        return false;
+        if (!spawned) {
+            updater_release(updater);
+            return false;
+        }
+        return true;
     }
-    memset(&updater->snap, 0, sizeof updater->snap);
-    updater->snap.state = APP_UPDATE_CHECKING;
-    updater->refcount++;
-    bool spawned = spawn_worker_locked(check_thread_entry, updater);
-    if (!spawned) {
-        updater->snap.state = APP_UPDATE_ERROR;
-        snprintf(updater->snap.error, sizeof updater->snap.error, "Could not start update check.");
-    }
-    mutex_unlock(&updater->mu);
-
-    if (!spawned) {
-        updater_release(updater);
-        return false;
-    }
-    return true;
 }
 
 bool app_updater_start_install(app_updater *updater) {
     if (!updater) return false;
-    mutex_lock(&updater->mu);
-    if (updater->destroyed || !updater->snap.has_update || !updater->snap.latest_tag[0] ||
-        updater->snap.state == APP_UPDATE_CHECKING ||
-        updater->snap.state == APP_UPDATE_UPDATING ||
-        updater->snap.state == APP_UPDATE_READY_TO_RELAUNCH) {
+    for (;;) {
+        mutex_lock(&updater->mu);
+        if (updater->destroyed || !updater->snap.has_update || !updater->snap.latest_tag[0] ||
+            updater->snap.state == APP_UPDATE_CHECKING ||
+            updater->snap.state == APP_UPDATE_UPDATING ||
+            updater->snap.state == APP_UPDATE_READY_TO_RELAUNCH) {
+            mutex_unlock(&updater->mu);
+            return false;
+        }
+        if (updater->has_worker) {
+            mutex_unlock(&updater->mu);
+            updater_join_worker(updater, true);
+            continue;
+        }
+        updater->snap.state = APP_UPDATE_UPDATING;
+        updater->snap.error[0] = '\0';
+        updater->refcount++;
+        bool spawned = spawn_worker_locked(install_thread_entry, updater);
+        if (!spawned) {
+            updater->snap.state = APP_UPDATE_ERROR;
+            snprintf(updater->snap.error, sizeof updater->snap.error, "Could not start update download.");
+        }
         mutex_unlock(&updater->mu);
-        return false;
-    }
-    bool need_join = updater->has_worker;
-    mutex_unlock(&updater->mu);
-    if (need_join) updater_join_worker(updater, true);
 
-    mutex_lock(&updater->mu);
-    if (updater->destroyed || !updater->snap.has_update || !updater->snap.latest_tag[0] ||
-        updater->snap.state == APP_UPDATE_CHECKING ||
-        updater->snap.state == APP_UPDATE_UPDATING ||
-        updater->snap.state == APP_UPDATE_READY_TO_RELAUNCH) {
-        mutex_unlock(&updater->mu);
-        return false;
+        if (!spawned) {
+            updater_release(updater);
+            return false;
+        }
+        return true;
     }
-    updater->snap.state = APP_UPDATE_UPDATING;
-    updater->snap.error[0] = '\0';
-    updater->refcount++;
-    bool spawned = spawn_worker_locked(install_thread_entry, updater);
-    if (!spawned) {
-        updater->snap.state = APP_UPDATE_ERROR;
-        snprintf(updater->snap.error, sizeof updater->snap.error, "Could not start update download.");
-    }
-    mutex_unlock(&updater->mu);
-
-    if (!spawned) {
-        updater_release(updater);
-        return false;
-    }
-    return true;
 }
 
 void app_updater_snapshot(app_updater *updater, app_update_snapshot *out) {

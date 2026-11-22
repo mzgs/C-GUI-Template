@@ -94,12 +94,6 @@ bool app_window_get_bounds(void *native_window, const char *backend,
     }
 }
 
-bool app_window_consume_pending_pos(int *x, int *y) {
-    (void)x;
-    (void)y;
-    return false;
-}
-
 bool app_window_set_pos(void *native_window, const char *backend, int x, int y) {
     if (!native_window || !backend || strcmp(backend, "cocoa") != 0) return false;
     if (x < APP_WINDOW_POS_MIN || x > APP_WINDOW_POS_MAX ||
@@ -623,7 +617,8 @@ bool app_updater_relaunch(const char *relaunch_path) {
     if (pid == 0) {
         (void)setsid();
         pid_t grand = fork();
-        if (grand != 0) _exit(0);
+        if (grand < 0) _exit(1);
+        if (grand > 0) _exit(0);
 
         int devnull = open("/dev/null", O_RDWR);
         if (devnull >= 0) {
@@ -646,7 +641,7 @@ bool app_updater_relaunch(const char *relaunch_path) {
     }
     int status = 0;
     while (waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) break;
+        if (errno != EINTR) return false;
     }
-    return true;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }

@@ -305,9 +305,7 @@ is_reserved_target() {
         log_tests|updater_tests|actions_tests|cui|yyjson|\
         run|all|all_build|zero_check|install|test|run_tests|clean|help|\
         edit_cache|rebuild_cache|package|package_source|\
-        list_install_components|install_local|install_strip|\
-        private|public|interface|targets|properties|command|depends|\
-        output_name|macosx_bundle|app_win32_output_name|app_linux_output_name)
+        list_install_components|install_local|install_strip)
             return 0
             ;;
     esac
@@ -621,8 +619,12 @@ EOF
 if [ "$DRY_RUN" -eq 1 ]; then
     echo ""
     echo "[dry-run] Would update CMakeLists.txt"
-    if [ -f install.sh ] && [ -n "$NEW_REPO" ] && [ -n "$CUR_INSTALL_REPO" ]; then
-        echo "[dry-run] Would update install.sh (REPO -> $NEW_REPO)"
+    if [ -f install.sh ]; then
+        if [ -n "$NEW_REPO" ]; then
+            echo "[dry-run] Would update install.sh (REPO -> $NEW_REPO)"
+        elif [ -n "$CUR_INSTALL_REPO" ]; then
+            echo "[dry-run] Would update install.sh (clear default REPO)"
+        fi
     fi
     if [ -f README.md ]; then
         echo "[dry-run] Would update README.md"
@@ -700,28 +702,38 @@ awk '
         }
         return lead prefix cmake_escape(val) "\"" after
     }
-    function replace_token(s, old_t, new_t,    out, pos, before, after, ol, rest) {
-        if (old_t == "" || old_t == new_t) return s
-        ol = length(old_t)
+    function replace_literal(s, old_s, new_s,    out, pos, ol, rest) {
+        if (old_s == "" || old_s == new_s) return s
+        ol = length(old_s)
         out = ""
         rest = s
-        while ((pos = index(rest, old_t)) > 0) {
-            if (pos > 1) before = substr(rest, pos - 1, 1)
-            else if (length(out) > 0) before = substr(out, length(out), 1)
-            else before = ""
-            after = (pos + ol <= length(rest)) ? substr(rest, pos + ol, 1) : ""
-            if (before !~ /[A-Za-z0-9_.\/-]/ && after !~ /[A-Za-z0-9_.\/-]/) {
-                out = out substr(rest, 1, pos - 1) new_t
-            } else {
-                out = out substr(rest, 1, pos + ol - 1)
-            }
+        while ((pos = index(rest, old_s)) > 0) {
+            out = out substr(rest, 1, pos - 1) new_s
             rest = substr(rest, pos + ol)
         }
         return out rest
     }
-    function is_target_line(line) {
-        return line ~ /^[[:space:]]*(add_executable|target_link_libraries|cui_app_target|install\(TARGETS|target_sources|set_target_properties|add_custom_target\(run|get_target_property|set\(APP_(WIN32|LINUX)_OUTPUT_NAME)[[:space:]\(]/ ||
-               index(line, "$<TARGET_FILE:") > 0
+    function replace_after_prefix(s, regex, old_t, new_t,    pre, rest, ol, after) {
+        if (!match(s, regex)) return s
+        pre = substr(s, 1, RSTART + RLENGTH - 1)
+        rest = substr(s, RSTART + RLENGTH)
+        ol = length(old_t)
+        if (substr(rest, 1, ol) != old_t) return s
+        after = substr(rest, ol + 1, 1)
+        if (after ~ /[A-Za-z0-9_.\/-]/) return s
+        return pre new_t substr(rest, ol + 1)
+    }
+    function replace_target_line(line, old_t, new_t) {
+        if (old_t == "" || old_t == new_t) return line
+        line = replace_literal(line, "$<TARGET_FILE:" old_t ">", "$<TARGET_FILE:" new_t ">")
+        line = replace_after_prefix(line, "^[[:space:]]*(add_executable|target_link_libraries|cui_app_target|target_sources|set_target_properties)\\([[:space:]]*", old_t, new_t)
+        line = replace_after_prefix(line, "^[[:space:]]*install\\([[:space:]]*TARGETS[[:space:]]+", old_t, new_t)
+        line = replace_after_prefix(line, "^[[:space:]]*get_target_property\\([[:space:]]*APP_(WIN32|LINUX)_OUTPUT_NAME[[:space:]]+", old_t, new_t)
+        line = replace_after_prefix(line, "^[[:space:]]*set\\([[:space:]]*APP_(WIN32|LINUX)_OUTPUT_NAME[[:space:]]+\"", old_t, new_t)
+        if (line ~ /^[[:space:]]*add_custom_target\([[:space:]]*run[[:space:]]/) {
+            line = replace_after_prefix(line, "[[:space:]]DEPENDS[[:space:]]+", old_t, new_t)
+        }
+        return line
     }
     {
         line = $0
@@ -747,16 +759,14 @@ awk '
             print line
             next
         }
-        if (is_target_line(line)) {
-            line = replace_token(line, ENVIRON["OLD_TARGET"], ENVIRON["NEW_TARGET"])
-        }
+        line = replace_target_line(line, ENVIRON["OLD_TARGET"], ENVIRON["NEW_TARGET"])
         print line
     }
 ' CMakeLists.txt > "$TMP_DIR/CMakeLists.txt"
 mv "$TMP_DIR/CMakeLists.txt" CMakeLists.txt
 
 # 2. Update install.sh
-if [ -f install.sh ] && [ -n "$NEW_REPO" ] && [ -n "$CUR_INSTALL_REPO" ]; then
+if [ -f install.sh ]; then
     OLD_REPO="$CUR_INSTALL_REPO" \
     NEW_REPO="$NEW_REPO" \
     awk '
@@ -772,7 +782,24 @@ if [ -f install.sh ] && [ -n "$NEW_REPO" ] && [ -n "$CUR_INSTALL_REPO" ]; then
             return out rest
         }
         {
-            print replace_all($0, ENVIRON["OLD_REPO"], ENVIRON["NEW_REPO"])
+            line = $0
+            new_repo = ENVIRON["NEW_REPO"]
+            old_repo = ENVIRON["OLD_REPO"]
+            if (line ~ /^REPO="\$\{REPO:-.*\}\"$/) {
+                print "REPO=\"${REPO:-" new_repo "}\""
+                next
+            }
+            if (new_repo != "") {
+                if (old_repo != "") {
+                    line = replace_all(line, old_repo, new_repo)
+                }
+                line = replace_all(line, "<owner>/<repo>", new_repo)
+                line = replace_all(line, "(default: none; set REPO=owner/repo)", "(default: " new_repo ")")
+            } else if (old_repo != "") {
+                line = replace_all(line, "(default: " old_repo ")", "(default: none; set REPO=owner/repo)")
+                line = replace_all(line, old_repo, "<owner>/<repo>")
+            }
+            print line
         }
     ' install.sh > "$TMP_DIR/install.sh"
     chmod 755 "$TMP_DIR/install.sh"
@@ -810,9 +837,15 @@ if [ -f README.md ]; then
             line = replace_all(line, "build\\Release\\" ENVIRON["OLD_TARGET"] ".exe", "build\\Release\\" ENVIRON["NEW_TARGET"] ".exe")
             line = replace_all(line, "build\\" ENVIRON["OLD_TARGET"] ".exe", "build\\" ENVIRON["NEW_TARGET"] ".exe")
             line = replace_all(line, "`" ENVIRON["OLD_TARGET"] "`", "`" ENVIRON["NEW_TARGET"] "`")
-            if (ENVIRON["NEW_REPO"] != "" && ENVIRON["OLD_REPO"] != "") {
-                line = replace_all(line, "raw.githubusercontent.com/" ENVIRON["OLD_REPO"] "/main/install.sh", "raw.githubusercontent.com/" ENVIRON["NEW_REPO"] "/main/install.sh")
-                line = replace_all(line, "REPO:-" ENVIRON["OLD_REPO"], "REPO:-" ENVIRON["NEW_REPO"])
+            if (ENVIRON["NEW_REPO"] != "") {
+                if (ENVIRON["OLD_REPO"] != "") {
+                    line = replace_all(line, "raw.githubusercontent.com/" ENVIRON["OLD_REPO"] "/main/install.sh", "raw.githubusercontent.com/" ENVIRON["NEW_REPO"] "/main/install.sh")
+                    line = replace_all(line, "REPO:-" ENVIRON["OLD_REPO"], "REPO:-" ENVIRON["NEW_REPO"])
+                }
+                line = replace_all(line, "raw.githubusercontent.com/<owner>/<repo>/main/install.sh", "raw.githubusercontent.com/" ENVIRON["NEW_REPO"] "/main/install.sh")
+            } else if (ENVIRON["OLD_REPO"] != "") {
+                line = replace_all(line, "raw.githubusercontent.com/" ENVIRON["OLD_REPO"] "/main/install.sh", "raw.githubusercontent.com/<owner>/<repo>/main/install.sh")
+                line = replace_all(line, "REPO:-" ENVIRON["OLD_REPO"], "REPO:-")
             }
             print line
         }

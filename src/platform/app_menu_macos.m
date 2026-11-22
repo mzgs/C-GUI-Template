@@ -108,7 +108,6 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
 @property(nonatomic, assign) cui_key_combo lastPaletteCombo;
 @property(nonatomic, assign) bool lastFullscreen;
 @property(nonatomic, strong) id keyMonitor;
-@property(nonatomic, assign) bool observingTerminate;
 - (void)showAbout:(id)sender;
 - (void)showSettings:(id)sender;
 - (void)triggerAction:(NSMenuItem *)sender;
@@ -116,7 +115,6 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
 - (void)toggleFullscreen:(id)sender;
 - (void)triggerEditKey:(NSMenuItem *)sender;
 - (void)quitApp:(id)sender;
-- (void)appWillTerminate:(NSNotification *)note;
 - (void)clearHooks;
 @end
 
@@ -226,11 +224,6 @@ static void sync_combo_item(NSMenuItem *item, cui_key_combo prev, cui_key_combo 
     self.onToggleFullscreen = NULL;
     self.onWillTerminate = NULL;
 }
-
-- (void)appWillTerminate:(NSNotification *)note {
-    (void)note;
-    if (self.onWillTerminate) self.onWillTerminate(self.user);
-}
 @end
 
 static AppMenuTarget *shared_menu_target;
@@ -256,14 +249,7 @@ static void trim_menu_to_count(NSMenu *menu, NSInteger count) {
     }
 }
 
-static void ensure_menu_monitors(AppMenuTarget *target) {
-    if (!target.observingTerminate) {
-        [[NSNotificationCenter defaultCenter] addObserver:target
-                                                 selector:@selector(appWillTerminate:)
-                                                     name:NSApplicationWillTerminateNotification
-                                                   object:nil];
-        target.observingTerminate = true;
-    }
+static void ensure_key_monitor(AppMenuTarget *target) {
     if (!target.keyMonitor) {
         /* CUI consumes custom Command shortcuts before the native menu sees them. */
         target.keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
@@ -285,7 +271,7 @@ void app_menu_install(const app_menu_hooks *hooks) {
     if (!hooks || !hooks->settings_open) return;
     if (shared_menu_target) {
         [shared_menu_target applyHooks:hooks];
-        ensure_menu_monitors(shared_menu_target);
+        ensure_key_monitor(shared_menu_target);
         return;
     }
     NSMenu *bar = NSApp.mainMenu;
@@ -351,7 +337,7 @@ void app_menu_install(const app_menu_hooks *hooks) {
     [bar insertItem:make_submenu_item(@"Edit", editMenu) atIndex:insertAt + 1];
     [bar insertItem:make_submenu_item(@"View", viewMenu) atIndex:insertAt + 2];
 
-    ensure_menu_monitors(target);
+    ensure_key_monitor(target);
 }
 
 void app_menu_shutdown(void) {
@@ -361,10 +347,6 @@ void app_menu_shutdown(void) {
         if (target.keyMonitor) {
             [NSEvent removeMonitor:target.keyMonitor];
             target.keyMonitor = nil;
-        }
-        if (target.observingTerminate) {
-            [[NSNotificationCenter defaultCenter] removeObserver:target];
-            target.observingTerminate = false;
         }
         [target clearHooks];
     }

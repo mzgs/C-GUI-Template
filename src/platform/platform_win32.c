@@ -98,12 +98,6 @@ bool app_window_get_bounds(void *native_window, const char *backend,
     return false;
 }
 
-bool app_window_consume_pending_pos(int *x, int *y) {
-    (void)x;
-    (void)y;
-    return false;
-}
-
 bool app_window_set_pos(void *native_window, const char *backend, int x, int y) {
     if (!native_window || !backend || strcmp(backend, "win32") != 0) return false;
     if (x < APP_WINDOW_POS_MIN || x > APP_WINDOW_POS_MAX ||
@@ -269,8 +263,12 @@ bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity
 
     do {
         wchar_t user_agent[256] = L"CUIApp";
-        MultiByteToWideChar(CP_UTF8, 0, APP_NAME "/" APP_VERSION, -1, user_agent,
-                            (int)(sizeof user_agent / sizeof user_agent[0]));
+        wchar_t ua_buf[256];
+        int ua_len = MultiByteToWideChar(CP_UTF8, 0, APP_NAME "/" APP_VERSION, -1, ua_buf,
+                                         (int)(sizeof ua_buf / sizeof ua_buf[0]));
+        if (ua_len > 0 && (size_t)ua_len <= sizeof user_agent / sizeof user_agent[0]) {
+            memcpy(user_agent, ua_buf, (size_t)ua_len * sizeof(wchar_t));
+        }
 #ifdef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
         session = WinHttpOpen(user_agent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);

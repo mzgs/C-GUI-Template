@@ -547,9 +547,115 @@ static void test_shortcuts_and_text_focus(void) {
     cleanup_test_dir(dir, path);
 }
 
+static void test_palette_shortcut_no_input_leak(void) {
+    char dir[1024], path[1088];
+    temp_settings_path("palette_leak", dir, sizeof dir, path, sizeof path);
+
+    app_chrome chrome;
+    init_test_chrome(&chrome, path);
+
+    test_state st = { 0 };
+    CHECK(app_chrome_register_action(&chrome, &(app_action_desc){
+        .id = "first_act",
+        .title = "First Action",
+        .on_trigger = on_save,
+        .user = &st,
+    }));
+
+    cui_ctx *ui = cui_create(NULL);
+    CHECK(ui != NULL);
+    cui_set_viewport(ui, 800, 600, 1.0f);
+    cui_set_reduced_motion(ui, true);
+
+    /* Warmup frame. */
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+
+    /* 1. Enter binding must open palette without firing the first command. */
+    chrome.settings.keybindings[chrome.command_palette_kb].combo = (cui_key_combo){ 0, CUI_KEY_ENTER };
+    cui_input_key(ui, CUI_KEY_ENTER, true, 0);
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_key(ui, CUI_KEY_ENTER, false, 0);
+    CHECK(chrome.palette_open);
+    CHECK(st.save_calls == 0);
+    /* Next frame renders the palette cleanly and leaves it open. */
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    CHECK(chrome.palette_open);
+    CHECK(st.save_calls == 0);
+
+    /* 2. Shift+Escape binding must open palette without immediately closing it. */
+    chrome.palette_open = false;
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+
+    chrome.settings.keybindings[chrome.command_palette_kb].combo =
+        (cui_key_combo){ CUI_MOD_SHIFT, CUI_KEY_ESCAPE };
+    cui_input_key(ui, CUI_KEY_ESCAPE, true, CUI_MOD_SHIFT);
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_key(ui, CUI_KEY_ESCAPE, false, 0);
+    CHECK(chrome.palette_open);
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    CHECK(chrome.palette_open);
+
+    /* 3. Printable '/' binding must not leak '/' into the palette search input. */
+    chrome.palette_open = false;
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+
+    chrome.settings.keybindings[chrome.command_palette_kb].combo = (cui_key_combo){ 0, CUI_KEY_SLASH };
+    cui_input_key(ui, CUI_KEY_SLASH, true, 0);
+    cui_input_text(ui, "/");
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_key(ui, CUI_KEY_SLASH, false, 0);
+    CHECK(chrome.palette_open);
+
+    /* Render the palette, then press Enter: if query is empty, "First Action" is selected. */
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_key(ui, CUI_KEY_ENTER, true, 0);
+    cui_begin_frame(ui, 1.0f / 60.0f);
+    app_chrome_begin_frame(&chrome, ui);
+    app_chrome_end_frame(&chrome, ui);
+    cui_end_frame(ui);
+    cui_input_key(ui, CUI_KEY_ENTER, false, 0);
+    CHECK(!chrome.palette_open);
+    CHECK(st.save_calls == 1);
+
+    cui_destroy(ui);
+    app_chrome_shutdown(&chrome);
+    cleanup_test_dir(dir, path);
+}
+
 static void test_settings_dir_rejects_file_and_env_path(void) {
     char dir[1024], path[1088];
     temp_settings_path("dircheck", dir, sizeof dir, path, sizeof path);
+
+    int exit_code = 0;
+    CHECK(!app_chrome_init(NULL, 0, NULL, &exit_code));
+    CHECK(exit_code == 1);
 
     char blocker[1088];
     char nested[1152];
@@ -568,14 +674,28 @@ static void test_settings_dir_rejects_file_and_env_path(void) {
 #ifndef _WIN32
     /* APP_SETTINGS_PATH is used when --settings is not provided on the CLI. */
     CHECK(setenv("APP_SETTINGS_PATH", path, 1) == 0);
+    CHECK(setenv("CUI_THEME", "invalid", 1) == 0);
+    CHECK(setenv("CUI_ACCENT", "invalid", 1) == 0);
     app_chrome chrome;
     char arg0[] = "actions_tests";
     char *argv[] = { arg0 };
-    int exit_code = 0;
+    exit_code = 0;
     CHECK(app_chrome_init(&chrome, 1, argv, &exit_code));
     CHECK(chrome.cli.settings_path != NULL);
     CHECK(strcmp(chrome.cli.settings_path, path) == 0);
+    CHECK(!chrome.env_theme_override);
+    CHECK(!chrome.env_accent_override);
     app_chrome_shutdown(&chrome);
+
+    CHECK(setenv("CUI_THEME", "dark", 1) == 0);
+    CHECK(setenv("CUI_ACCENT", "blue", 1) == 0);
+    CHECK(app_chrome_init(&chrome, 1, argv, &exit_code));
+    CHECK(chrome.env_theme_override);
+    CHECK(chrome.env_accent_override);
+    app_chrome_shutdown(&chrome);
+
+    unsetenv("CUI_THEME");
+    unsetenv("CUI_ACCENT");
     unsetenv("APP_SETTINGS_PATH");
 #endif
 
@@ -587,6 +707,7 @@ int main(void) {
     test_deferred_keybindings_persistence_and_reset();
     test_palette_provider_and_group_coalescing();
     test_shortcuts_and_text_focus();
+    test_palette_shortcut_no_input_leak();
     test_settings_dir_rejects_file_and_env_path();
     if (failures > 0) {
         fprintf(stderr, "%d test(s) failed.\n", failures);
