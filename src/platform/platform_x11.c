@@ -289,27 +289,28 @@ static const char *linux_release_arch(void) {
 #endif
 }
 
-static int linux_max_close_fd(void) {
-    long limit = sysconf(_SC_OPEN_MAX);
-    if (limit < STDERR_FILENO + 1) return 256;
-    if (limit > 4096) return 4096;
-    return (int)limit;
-}
-
 static bool linux_run_process(char *const argv[], char *out, size_t out_cap,
-                              app_updater_abort_fn should_abort, void *abort_user) {
-    if (should_abort && should_abort(abort_user)) return false;
+                              app_updater_abort_fn should_abort, void *abort_user,
+                              const char *cancel_msg, const char *fail_msg,
+                              char *err, size_t err_cap) {
+    if (out && out_cap > 0) out[0] = '\0';
+    if (should_abort && should_abort(abort_user)) {
+        linux_set_err(err, err_cap, cancel_msg);
+        return false;
+    }
     int pipefd[2] = { -1, -1 };
-    if (out && out_cap > 0) {
-        out[0] = '\0';
-        if (pipe(pipefd) != 0) return false;
+    if (out && out_cap > 0 && pipe(pipefd) != 0) {
+        linux_set_err(err, err_cap, fail_msg);
+        return false;
     }
 
-    int max_fd = linux_max_close_fd();
+    long limit = sysconf(_SC_OPEN_MAX);
+    int max_fd = limit < STDERR_FILENO + 1 ? 256 : (limit > 4096 ? 4096 : (int)limit);
     pid_t pid = fork();
     if (pid < 0) {
         if (pipefd[0] >= 0) close(pipefd[0]);
         if (pipefd[1] >= 0) close(pipefd[1]);
+        linux_set_err(err, err_cap, fail_msg);
         return false;
     }
     if (pid == 0) {
@@ -350,10 +351,7 @@ static bool linux_run_process(char *const argv[], char *out, size_t out_cap,
                 (void)kill(pid, SIGTERM);
                 break;
             }
-            struct pollfd pfd;
-            pfd.fd = pipefd[0];
-            pfd.events = POLLIN;
-            pfd.revents = 0;
+            struct pollfd pfd = { .fd = pipefd[0], .events = POLLIN };
             int pr = poll(&pfd, 1, 50);
             if (pr < 0) {
                 if (errno == EINTR) continue;
@@ -403,15 +401,35 @@ static bool linux_run_process(char *const argv[], char *out, size_t out_cap,
         struct timespec ts = { 0, 25000000L };
         (void)nanosleep(&ts, NULL);
     }
-    return reaped && !aborted && !truncated && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+
+    bool cancelled = aborted || (should_abort && should_abort(abort_user));
+    bool ok = reaped && !cancelled && !truncated &&
+              WIFEXITED(status) && WEXITSTATUS(status) == 0 &&
+              (!out || out_cap == 0 || out[0] != '\0');
+    if (!ok) linux_set_err(err, err_cap, cancelled ? cancel_msg : fail_msg);
+    return ok;
 }
 
-static bool linux_current_exe(char *exe_path, size_t cap) {
-    if (!exe_path || cap < 2) return false;
-    ssize_t n = readlink("/proc/self/exe", exe_path, cap - 1);
-    if (n <= 0 || (size_t)n >= cap - 1) return false;
+static bool linux_exe_paths(char *exe_path, size_t exe_cap,
+                            char *parent_dir, size_t parent_cap,
+                            const char **exe_name) {
+    if (!exe_path || exe_cap < 2 || !parent_dir || parent_cap < 2) return false;
+    ssize_t n = readlink("/proc/self/exe", exe_path, exe_cap - 1);
+    if (n <= 0 || (size_t)n >= exe_cap - 1) return false;
     exe_path[n] = '\0';
     if (strstr(exe_path, " (deleted)")) return false;
+    const char *slash = strrchr(exe_path, '/');
+    if (!slash || !slash[1]) return false;
+    size_t plen = (size_t)(slash - exe_path);
+    if (plen == 0) {
+        snprintf(parent_dir, parent_cap, "/");
+    } else if (plen < parent_cap) {
+        memcpy(parent_dir, exe_path, plen);
+        parent_dir[plen] = '\0';
+    } else {
+        return false;
+    }
+    if (exe_name) *exe_name = slash + 1;
     return true;
 }
 
@@ -487,28 +505,17 @@ bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity
         "-o", "/dev/null", "-w", "%{url_effective}",
         "--", (char *)url, NULL
     };
-    if (!linux_run_process(argv, final_url, capacity, should_abort, abort_user) || !final_url[0]) {
-        if (should_abort && should_abort(abort_user)) {
-            linux_set_err(err, err_cap, "Update check cancelled.");
-        } else {
-            linux_set_err(err, err_cap, "Could not reach GitHub (check network connection and curl).");
-        }
-        return false;
-    }
-    return true;
+    return linux_run_process(argv, final_url, capacity, should_abort, abort_user,
+                             "Update check cancelled.",
+                             "Could not reach GitHub (check network connection and curl).",
+                             err, err_cap);
 }
 
 bool app_updater_can_self_update(void) {
-    if (!linux_release_arch()) return false;
-    char exe_path[PATH_MAX];
-    if (!linux_current_exe(exe_path, sizeof exe_path)) return false;
-    char *slash = strrchr(exe_path, '/');
-    if (!slash) return false;
-    if (slash == exe_path) {
-        return access("/", W_OK) == 0;
-    }
-    *slash = '\0';
-    return access(exe_path, W_OK) == 0;
+    char exe_path[PATH_MAX], parent_dir[PATH_MAX];
+    return linux_release_arch() &&
+           linux_exe_paths(exe_path, sizeof exe_path, parent_dir, sizeof parent_dir, NULL) &&
+           access(parent_dir, W_OK) == 0;
 }
 
 bool app_updater_install_release(const char *repo, const char *tag,
@@ -525,35 +532,18 @@ bool app_updater_install_release(const char *repo, const char *tag,
         linux_set_err(err, err_cap, "Invalid repository or architecture.");
         return false;
     }
-    const char *repo_name = slash + 1;
 
-    char exe_path[PATH_MAX];
-    if (!linux_current_exe(exe_path, sizeof exe_path)) {
+    char exe_path[PATH_MAX], parent_dir[PATH_MAX];
+    const char *exe_name = NULL;
+    if (!linux_exe_paths(exe_path, sizeof exe_path, parent_dir, sizeof parent_dir, &exe_name)) {
         linux_set_err(err, err_cap, "Could not locate current executable.");
-        return false;
-    }
-    char parent_dir[PATH_MAX];
-    const char *exe_slash = strrchr(exe_path, '/');
-    if (!exe_slash || !exe_slash[1]) {
-        linux_set_err(err, err_cap, "Invalid executable path.");
-        return false;
-    }
-    const char *exe_name = exe_slash + 1;
-    size_t parent_len = (size_t)(exe_slash - exe_path);
-    if (parent_len == 0) {
-        snprintf(parent_dir, sizeof parent_dir, "/");
-    } else if (parent_len < sizeof parent_dir) {
-        memcpy(parent_dir, exe_path, parent_len);
-        parent_dir[parent_len] = '\0';
-    } else {
-        linux_set_err(err, err_cap, "Executable path is too long.");
         return false;
     }
 
     char url[1024];
     int un = snprintf(url, sizeof url,
                       "https://github.com/%s/releases/download/%s/%s-%s-linux-%s.tar.gz",
-                      repo, tag, repo_name, tag, arch);
+                      repo, tag, slash + 1, tag, arch);
     if (un < 0 || (size_t)un >= sizeof url) {
         linux_set_err(err, err_cap, "Release download URL is too long.");
         return false;
@@ -568,10 +558,7 @@ bool app_updater_install_release(const char *repo, const char *tag,
         return false;
     }
 
-    char archive_path[PATH_MAX];
-    char extract_dir[PATH_MAX];
-    char staged_path[PATH_MAX];
-    staged_path[0] = '\0';
+    char archive_path[PATH_MAX], extract_dir[PATH_MAX], staged_path[PATH_MAX] = "";
     bool ok = false;
 
     do {
@@ -585,30 +572,22 @@ bool app_updater_install_release(const char *repo, const char *tag,
             "curl", "-fsSL", "--max-time", "180",
             "-o", archive_path, "--", url, NULL
         };
-        if (!linux_run_process(curl_argv, NULL, 0, should_abort, abort_user)) {
-            linux_set_err(err, err_cap,
-                          (should_abort && should_abort(abort_user))
-                              ? "Update cancelled."
-                              : "Could not download the Linux release archive.");
+        if (!linux_run_process(curl_argv, NULL, 0, should_abort, abort_user,
+                               "Update cancelled.",
+                               "Could not download the Linux release archive.",
+                               err, err_cap))
             break;
-        }
-        if (should_abort && should_abort(abort_user)) {
-            linux_set_err(err, err_cap, "Update cancelled.");
-            break;
-        }
         if (mkdir(extract_dir, 0700) != 0) {
             linux_set_err(err, err_cap, "Could not create extraction directory.");
             break;
         }
 
         char *tar_argv[] = { "tar", "-xzf", archive_path, "-C", extract_dir, NULL };
-        if (!linux_run_process(tar_argv, NULL, 0, should_abort, abort_user)) {
-            linux_set_err(err, err_cap,
-                          (should_abort && should_abort(abort_user))
-                              ? "Update cancelled."
-                              : "Could not extract update archive.");
+        if (!linux_run_process(tar_argv, NULL, 0, should_abort, abort_user,
+                               "Update cancelled.",
+                               "Could not extract update archive.",
+                               err, err_cap))
             break;
-        }
 
         char src_bin[PATH_MAX] = "";
         DIR *dir = opendir(extract_dir);
@@ -665,44 +644,4 @@ bool app_updater_install_release(const char *repo, const char *tag,
     if (staged_path[0]) (void)unlink(staged_path);
     linux_remove_tree(tmp_dir);
     return ok;
-}
-
-bool app_updater_relaunch(const char *relaunch_path) {
-    if (!relaunch_path || !relaunch_path[0]) return false;
-    char pid_str[32];
-    snprintf(pid_str, sizeof pid_str, "%ld", (long)getpid());
-    int max_fd = linux_max_close_fd();
-
-    pid_t pid = fork();
-    if (pid < 0) return false;
-    if (pid == 0) {
-        (void)setsid();
-        pid_t grand = fork();
-        if (grand < 0) _exit(1);
-        if (grand > 0) _exit(0);
-
-        int devnull = open("/dev/null", O_RDWR);
-        if (devnull >= 0) {
-            (void)dup2(devnull, STDIN_FILENO);
-            (void)dup2(devnull, STDOUT_FILENO);
-            (void)dup2(devnull, STDERR_FILENO);
-            if (devnull > STDERR_FILENO) close(devnull);
-        }
-        for (int fd = STDERR_FILENO + 1; fd < max_fd; ++fd) {
-            close(fd);
-        }
-        static const char script[] =
-            "pid=\"$1\"; bin=\"$2\"; i=0; "
-            "while kill -0 \"$pid\" 2>/dev/null && [ \"$i\" -lt 100 ]; do "
-            "sleep 0.05; i=$((i + 1)); "
-            "done; "
-            "exec \"$bin\"";
-        execl("/bin/sh", "sh", "-c", script, "relaunch", pid_str, relaunch_path, (char *)NULL);
-        _exit(127);
-    }
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) return false;
-    }
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }

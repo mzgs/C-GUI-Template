@@ -24,7 +24,11 @@ static void mutex_destroy(updater_mutex *m) { DeleteCriticalSection(m); }
 static void mutex_lock(updater_mutex *m) { EnterCriticalSection(m); }
 static void mutex_unlock(updater_mutex *m) { LeaveCriticalSection(m); }
 #else
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
+#include <sys/wait.h>
+#include <unistd.h>
 typedef pthread_mutex_t updater_mutex;
 static void mutex_init(updater_mutex *m) { pthread_mutex_init(m, NULL); }
 static void mutex_destroy(updater_mutex *m) { pthread_mutex_destroy(m); }
@@ -41,6 +45,7 @@ struct app_updater {
     int refcount;
     bool destroyed;
     bool has_worker;
+    bool worker_is_install;
 #ifdef _WIN32
     HANDLE worker;
 #else
@@ -156,10 +161,9 @@ static bool parse_version(const char *str, parsed_version *out) {
         const char *plus = strchr(pre_start, '+');
         const char *pre_end = plus ? plus : pre_start + strlen(pre_start);
         if (!validate_dot_identifiers(pre_start, pre_end)) return false;
-        if (plus && !validate_dot_identifiers(plus + 1, plus + 1 + strlen(plus + 1))) return false;
         out->prerelease = pre_start;
         out->prerelease_len = (size_t)(pre_end - pre_start);
-        return true;
+        p = pre_end;
     }
     if (*p == '+') {
         const char *meta_start = p + 1;
@@ -317,15 +321,8 @@ void app_updater_destroy(app_updater *updater) {
 }
 
 static void run_check_worker(app_updater *u) {
-    char repo[128];
-    char current_ver[64];
-    mutex_lock(&u->mu);
-    snprintf(repo, sizeof repo, "%s", u->repo);
-    snprintf(current_ver, sizeof current_ver, "%s", u->current_version);
-    mutex_unlock(&u->mu);
-
     char latest_url[256];
-    snprintf(latest_url, sizeof latest_url, "https://github.com/%s/releases/latest", repo);
+    snprintf(latest_url, sizeof latest_url, "https://github.com/%s/releases/latest", u->repo);
 
     char resolved_url[512] = "";
     char err[256] = "";
@@ -350,7 +347,7 @@ static void run_check_worker(app_updater *u) {
             }
         } else {
             const char *ver = (tag[0] == 'v' || tag[0] == 'V') ? tag + 1 : tag;
-            int cmp = app_updater_compare_versions(ver, current_ver);
+            int cmp = app_updater_compare_versions(ver, u->current_version);
             snprintf(next.latest_tag, sizeof next.latest_tag, "%s", tag);
             snprintf(next.latest_version, sizeof next.latest_version, "%s", ver);
             snprintf(next.release_url, sizeof next.release_url, "%s", resolved_url);
@@ -366,40 +363,33 @@ static void run_check_worker(app_updater *u) {
         }
     }
 
-    bool destroyed = false;
     mutex_lock(&u->mu);
-    destroyed = u->destroyed;
-    if (!destroyed) {
-        u->snap = next;
-    }
+    bool destroyed = u->destroyed;
+    if (!destroyed) u->snap = next;
     mutex_unlock(&u->mu);
 
     if (!destroyed) {
         if (next.state == APP_UPDATE_AVAILABLE) {
-            app_log_info("Update available: %s (current %s)", next.latest_tag, current_ver);
+            app_log_info("Update available: %s (current %s)", next.latest_tag, u->current_version);
         } else if (next.state == APP_UPDATE_ERROR) {
             app_log_warn("Update check failed: %s", next.error[0] ? next.error : "unknown error");
         }
     }
-    updater_release(u);
 }
 
 static void run_install_worker(app_updater *u) {
-    char repo[128];
     char tag[64];
     mutex_lock(&u->mu);
-    snprintf(repo, sizeof repo, "%s", u->repo);
     snprintf(tag, sizeof tag, "%s", u->snap.latest_tag);
     mutex_unlock(&u->mu);
 
     char relaunch_path[4096] = "";
     char err[256] = "";
-    bool ok = app_updater_install_release(repo, tag, relaunch_path, sizeof relaunch_path,
+    bool ok = app_updater_install_release(u->repo, tag, relaunch_path, sizeof relaunch_path,
                                           updater_should_abort, u, err, sizeof err);
 
-    bool destroyed = false;
     mutex_lock(&u->mu);
-    destroyed = u->destroyed;
+    bool destroyed = u->destroyed;
     if (!destroyed) {
         if (ok) {
             u->snap.state = APP_UPDATE_READY_TO_RELAUNCH;
@@ -420,55 +410,51 @@ static void run_install_worker(app_updater *u) {
             app_log_error("Update install failed (%s): %s", tag, err[0] ? err : "unknown error");
         }
     }
+}
+
+static void run_worker(app_updater *u) {
+    if (u->worker_is_install) run_install_worker(u);
+    else run_check_worker(u);
     updater_release(u);
 }
 
 #ifdef _WIN32
-static DWORD WINAPI check_thread_entry(LPVOID param) {
-    run_check_worker((app_updater *)param);
+static DWORD WINAPI worker_thread_entry(LPVOID param) {
+    run_worker((app_updater *)param);
     return 0;
 }
 
-static DWORD WINAPI install_thread_entry(LPVOID param) {
-    run_install_worker((app_updater *)param);
-    return 0;
-}
-
-static bool spawn_worker_locked(LPTHREAD_START_ROUTINE fn, app_updater *u) {
-    HANDLE h = CreateThread(NULL, 0, fn, u, 0, NULL);
+static bool spawn_worker_locked(app_updater *u) {
+    HANDLE h = CreateThread(NULL, 0, worker_thread_entry, u, 0, NULL);
     if (!h) return false;
     u->worker = h;
     u->has_worker = true;
     return true;
 }
 #else
-static void *check_thread_entry(void *param) {
-    run_check_worker((app_updater *)param);
+static void *worker_thread_entry(void *param) {
+    run_worker((app_updater *)param);
     return NULL;
 }
 
-static void *install_thread_entry(void *param) {
-    run_install_worker((app_updater *)param);
-    return NULL;
-}
-
-static bool spawn_worker_locked(void *(*fn)(void *), app_updater *u) {
+static bool spawn_worker_locked(app_updater *u) {
     pthread_t tid;
-    if (pthread_create(&tid, NULL, fn, u) != 0) return false;
+    if (pthread_create(&tid, NULL, worker_thread_entry, u) != 0) return false;
     u->worker = tid;
     u->has_worker = true;
     return true;
 }
 #endif
 
-bool app_updater_check(app_updater *updater) {
+static bool updater_start_worker(app_updater *updater, bool install) {
     if (!updater) return false;
     for (;;) {
         mutex_lock(&updater->mu);
         if (updater->destroyed ||
             updater->snap.state == APP_UPDATE_CHECKING ||
             updater->snap.state == APP_UPDATE_UPDATING ||
-            updater->snap.state == APP_UPDATE_READY_TO_RELAUNCH) {
+            updater->snap.state == APP_UPDATE_READY_TO_RELAUNCH ||
+            (install && (!updater->snap.has_update || !updater->snap.latest_tag[0]))) {
             mutex_unlock(&updater->mu);
             return false;
         }
@@ -477,13 +463,21 @@ bool app_updater_check(app_updater *updater) {
             updater_join_worker(updater, true);
             continue;
         }
-        memset(&updater->snap, 0, sizeof updater->snap);
-        updater->snap.state = APP_UPDATE_CHECKING;
+        if (install) {
+            updater->snap.state = APP_UPDATE_UPDATING;
+            updater->snap.error[0] = '\0';
+        } else {
+            memset(&updater->snap, 0, sizeof updater->snap);
+            updater->snap.state = APP_UPDATE_CHECKING;
+        }
+        updater->worker_is_install = install;
         updater->refcount++;
-        bool spawned = spawn_worker_locked(check_thread_entry, updater);
+        bool spawned = spawn_worker_locked(updater);
         if (!spawned) {
             updater->snap.state = APP_UPDATE_ERROR;
-            snprintf(updater->snap.error, sizeof updater->snap.error, "Could not start update check.");
+            snprintf(updater->snap.error, sizeof updater->snap.error, "%s",
+                     install ? "Could not start update download."
+                             : "Could not start update check.");
         }
         mutex_unlock(&updater->mu);
 
@@ -495,38 +489,12 @@ bool app_updater_check(app_updater *updater) {
     }
 }
 
-bool app_updater_start_install(app_updater *updater) {
-    if (!updater) return false;
-    for (;;) {
-        mutex_lock(&updater->mu);
-        if (updater->destroyed || !updater->snap.has_update || !updater->snap.latest_tag[0] ||
-            updater->snap.state == APP_UPDATE_CHECKING ||
-            updater->snap.state == APP_UPDATE_UPDATING ||
-            updater->snap.state == APP_UPDATE_READY_TO_RELAUNCH) {
-            mutex_unlock(&updater->mu);
-            return false;
-        }
-        if (updater->has_worker) {
-            mutex_unlock(&updater->mu);
-            updater_join_worker(updater, true);
-            continue;
-        }
-        updater->snap.state = APP_UPDATE_UPDATING;
-        updater->snap.error[0] = '\0';
-        updater->refcount++;
-        bool spawned = spawn_worker_locked(install_thread_entry, updater);
-        if (!spawned) {
-            updater->snap.state = APP_UPDATE_ERROR;
-            snprintf(updater->snap.error, sizeof updater->snap.error, "Could not start update download.");
-        }
-        mutex_unlock(&updater->mu);
+bool app_updater_check(app_updater *updater) {
+    return updater_start_worker(updater, false);
+}
 
-        if (!spawned) {
-            updater_release(updater);
-            return false;
-        }
-        return true;
-    }
+bool app_updater_start_install(app_updater *updater) {
+    return updater_start_worker(updater, true);
 }
 
 void app_updater_snapshot(app_updater *updater, app_update_snapshot *out) {
@@ -545,4 +513,54 @@ bool app_updater_is_busy(app_updater *updater) {
                 updater->snap.state == APP_UPDATE_UPDATING;
     mutex_unlock(&updater->mu);
     return busy;
+}
+
+bool app_updater_relaunch(const char *relaunch_path) {
+#ifdef _WIN32
+    (void)relaunch_path;
+    return false;
+#else
+    if (!relaunch_path || !relaunch_path[0]) return false;
+    char pid_str[32];
+    snprintf(pid_str, sizeof pid_str, "%ld", (long)getpid());
+    long limit = sysconf(_SC_OPEN_MAX);
+    int max_fd = limit < STDERR_FILENO + 1 ? 256 : (limit > 4096 ? 4096 : (int)limit);
+
+    pid_t pid = fork();
+    if (pid < 0) return false;
+    if (pid == 0) {
+        (void)setsid();
+        pid_t grand = fork();
+        if (grand < 0) _exit(1);
+        if (grand > 0) _exit(0);
+
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            (void)dup2(devnull, STDIN_FILENO);
+            (void)dup2(devnull, STDOUT_FILENO);
+            (void)dup2(devnull, STDERR_FILENO);
+            if (devnull > STDERR_FILENO) close(devnull);
+        }
+        for (int fd = STDERR_FILENO + 1; fd < max_fd; ++fd) {
+            close(fd);
+        }
+        static const char script[] =
+            "pid=\"$1\"; target=\"$2\"; i=0; "
+            "while kill -0 \"$pid\" 2>/dev/null && [ \"$i\" -lt 100 ]; do "
+            "sleep 0.05; i=$((i + 1)); "
+            "done; "
+#ifdef __APPLE__
+            "/usr/bin/open -n \"$target\"";
+#else
+            "exec \"$target\"";
+#endif
+        execl("/bin/sh", "sh", "-c", script, "relaunch", pid_str, relaunch_path, (char *)NULL);
+        _exit(127);
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) return false;
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#endif
 }

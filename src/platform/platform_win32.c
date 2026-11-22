@@ -242,33 +242,28 @@ bool app_http_resolve_redirect(const char *url, char *final_url, size_t capacity
         return false;
     }
 
-    wchar_t host[256] = { 0 };
-    wchar_t path[1536] = { 0 };
-    URL_COMPONENTSW parts;
-    memset(&parts, 0, sizeof parts);
-    parts.dwStructSize = sizeof parts;
-    parts.lpszHostName = host;
-    parts.dwHostNameLength = (DWORD)(sizeof host / sizeof host[0]);
-    parts.lpszUrlPath = path;
-    parts.dwUrlPathLength = (DWORD)(sizeof path / sizeof path[0]);
+    wchar_t host[256] = { 0 }, path[1536] = { 0 };
+    URL_COMPONENTSW parts = {
+        .dwStructSize = sizeof parts,
+        .lpszHostName = host,
+        .dwHostNameLength = (DWORD)(sizeof host / sizeof host[0]),
+        .lpszUrlPath = path,
+        .dwUrlPathLength = (DWORD)(sizeof path / sizeof path[0]),
+    };
     if (!WinHttpCrackUrl(wide_url, 0, 0, &parts) || !host[0]) {
         win32_set_err(err, err_cap, "Invalid update URL.");
         return false;
     }
 
     bool ok = false;
-    HINTERNET session = NULL;
-    HINTERNET connect = NULL;
-    HINTERNET request = NULL;
+    HINTERNET session = NULL, connect = NULL, request = NULL;
 
     do {
-        wchar_t user_agent[256] = L"CUIApp";
         wchar_t ua_buf[256];
-        int ua_len = MultiByteToWideChar(CP_UTF8, 0, APP_NAME "/" APP_VERSION, -1, ua_buf,
-                                         (int)(sizeof ua_buf / sizeof ua_buf[0]));
-        if (ua_len > 0 && (size_t)ua_len <= sizeof user_agent / sizeof user_agent[0]) {
-            memcpy(user_agent, ua_buf, (size_t)ua_len * sizeof(wchar_t));
-        }
+        const wchar_t *user_agent =
+            MultiByteToWideChar(CP_UTF8, 0, APP_NAME "/" APP_VERSION, -1,
+                                ua_buf, (int)(sizeof ua_buf / sizeof ua_buf[0])) > 0
+                ? ua_buf : L"CUIApp";
 #ifdef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
         session = WinHttpOpen(user_agent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -367,10 +362,5 @@ bool app_updater_install_release(const char *repo, const char *tag,
     (void)should_abort;
     (void)abort_user;
     win32_set_err(err, err_cap, "In-place update is not supported on Windows.");
-    return false;
-}
-
-bool app_updater_relaunch(const char *relaunch_path) {
-    (void)relaunch_path;
     return false;
 }

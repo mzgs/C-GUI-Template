@@ -58,7 +58,4 @@ bool app_updater_install_release(const char *repo, const char *tag,
                                  app_updater_abort_fn should_abort, void *abort_user,
                                  char *err, size_t err_cap);
 
-/* Spawn a detached helper that waits for this process to exit and launches path. */
-bool app_updater_relaunch(const char *relaunch_path);
-
 #endif

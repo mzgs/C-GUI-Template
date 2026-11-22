@@ -50,4 +50,7 @@ bool app_updater_start_install(app_updater *updater);
 void app_updater_snapshot(app_updater *updater, app_update_snapshot *out);
 bool app_updater_is_busy(app_updater *updater);
 
+/* Spawn a detached helper that waits for this process to exit and launches path. */
+bool app_updater_relaunch(const char *relaunch_path);
+
 #endif
