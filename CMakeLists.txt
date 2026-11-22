@@ -49,7 +49,20 @@ FetchContent_Declare(cui
 FetchContent_Declare(yyjson
     GIT_REPOSITORY https://github.com/ibireme/yyjson.git
     GIT_TAG 6447536015f3d600f3d65323b10976103b337ca7)
-FetchContent_MakeAvailable(cui yyjson)
+FetchContent_MakeAvailable(yyjson)
+if(WIN32 AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
+    # Work around Better-C-UI dc79554 passing "/" to file(RELATIVE_PATH) on Windows.
+    if(CMAKE_INSTALL_LIBDIR)
+        get_filename_component(_cui_libdir "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}" ABSOLUTE)
+    else()
+        get_filename_component(_cui_libdir "${CMAKE_INSTALL_PREFIX}/lib" ABSOLUTE)
+    endif()
+    set(CMAKE_INSTALL_LIBDIR "${_cui_libdir}")
+    FetchContent_MakeAvailable(cui)
+    unset(CMAKE_INSTALL_LIBDIR)
+else()
+    FetchContent_MakeAvailable(cui)
+endif()
 
 app_escape_c(APP_C_NAME "${APP_NAME}")
 app_escape_c(APP_C_DESCRIPTION "${APP_DESCRIPTION}")
