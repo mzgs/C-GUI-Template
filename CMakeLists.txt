@@ -45,13 +45,13 @@ find_package(Threads REQUIRED)
 include(FetchContent)
 FetchContent_Declare(cui
     GIT_REPOSITORY https://github.com/mzgs/Better-C-UI.git
-    GIT_TAG dc79554d91ffbd2d6ac57b937cc2d12a21fb236b)
+    GIT_TAG 437c279afaeced0c501ed7fbb04b5d64060fffe9)
 FetchContent_Declare(yyjson
     GIT_REPOSITORY https://github.com/ibireme/yyjson.git
     GIT_TAG 6447536015f3d600f3d65323b10976103b337ca7)
 FetchContent_MakeAvailable(yyjson)
 if(WIN32 AND NOT IS_ABSOLUTE "${CMAKE_INSTALL_LIBDIR}")
-    # Work around Better-C-UI dc79554 passing "/" to file(RELATIVE_PATH) on Windows.
+    # Work around Better-C-UI passing "/" to file(RELATIVE_PATH) on Windows.
     if(CMAKE_INSTALL_LIBDIR)
         get_filename_component(_cui_libdir "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}" ABSOLUTE)
     else()
